@@ -11,14 +11,27 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.novel.aiwriter",
       "adaptiveIcon": {
         "backgroundColor": "#0F172A"
-      }
+      },
+      "versionCode": 1
     },
     "web": {
       "bundler": "metro",
       "output": "single"
     },
-    "plugins": ["expo-router", "expo-secure-store", "expo-sqlite"]
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "32df509e-768e-4f64-87b6-3bb6658e1ef1"
+      }
+    },
+    "owner": "ghr1236"
   }
 }
