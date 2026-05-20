@@ -14,6 +14,14 @@ export type BookStatus = "drafting" | "paused" | "finished";
 
 export type SkillAction = "appendText" | "replaceSelection" | "updateMaterials" | "chatOnly";
 
+export type Conversation = {
+  id: string;
+  bookId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type Book = {
   id: string;
   title: string;
@@ -91,6 +99,7 @@ export type ApiProvider = {
 export type ChatMessage = {
   id: string;
   bookId: string;
+  conversationId: string;
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
