@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Button, ConfirmDialog, Field, HorizontalList, Notice, Pill, Screen, Section, TopBar } from "../../src/components/Ui";
 import { getSelectedBookData, useApp } from "../../src/context/AppContext";
@@ -16,6 +17,12 @@ type CreateDialogType = CreateActionKey | null;
 
 const BOOK_COVER_WIDTH = "46.5%";
 const PALETTE = ["#0F8B6C", "#4A90D9", "#E67E22", "#27AE60", "#8E44AD", "#E74C3C", "#1ABC9C", "#2C3E50"];
+const CHINESE_NUMBERS = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"];
+
+function toChineseNumber(n: number): string {
+  if (n >= 0 && n < CHINESE_NUMBERS.length) return CHINESE_NUMBERS[n];
+  return String(n);
+}
 
 function bookColor(book: Book): string {
   let hash = 0;
@@ -59,18 +66,16 @@ export default function NovelsScreen() {
     await app.addChapter(selected.book.id, volumeId, newChapterTitle.trim() || `第${selected.chapters.length + 1}章`);
     setNewChapterTitle("");
     setCreateDialog(null);
-    setNotice("章节已添加。");
     setActiveTab("catalog");
     setExpandedVolumes((prev) => new Set(prev).add(volumeId));
   }
 
   async function createNewVolume() {
     if (!selected.book) return;
-    const volumeId = await app.addVolume(selected.book.id, newVolumeTitle.trim() || `第${selected.volumes.length + 1}卷`);
+    const volumeId = await app.addVolume(selected.book.id, newVolumeTitle.trim() || `第${toChineseNumber(selected.volumes.length + 1)}卷`);
     setNewVolumeTitle("");
     setTargetVolumeId(volumeId);
     setCreateDialog(null);
-    setNotice("分卷已添加。");
     setActiveTab("catalog");
     setExpandedVolumes((prev) => new Set(prev).add(volumeId));
   }
@@ -80,14 +85,12 @@ export default function NovelsScreen() {
     setView("book");
     setActiveTab("catalog");
     setCreateActionsOpen(false);
-    setNotice("");
   }
 
   function goBack() {
     setView("bookshelf");
     setCreateActionsOpen(false);
     setCreateDialog(null);
-    setNotice("");
   }
 
   function openCreateDialog(type: CreateActionKey) {
@@ -97,7 +100,7 @@ export default function NovelsScreen() {
       setTargetVolumeId(targetVolumeId || selected.volumes[0]?.id || "");
       setNewChapterTitle(`第${selected.chapters.length + 1}章`);
     } else {
-      setNewVolumeTitle(`第${selected.volumes.length + 1}卷`);
+      setNewVolumeTitle(`第${toChineseNumber(selected.volumes.length + 1)}卷`);
     }
   }
 
@@ -106,14 +109,12 @@ export default function NovelsScreen() {
     await app.deleteBook(deletingBookId);
     setDeletingBookId(null);
     setView("bookshelf");
-    setNotice("书本已删除。");
   }
 
   async function handleDeleteVolume() {
     if (!deletingVolumeId) return;
     await app.deleteVolume(deletingVolumeId);
     setDeletingVolumeId(null);
-    setNotice("分卷已删除。");
   }
 
   function toggleVolume(volumeId: string) {
@@ -147,7 +148,7 @@ export default function NovelsScreen() {
         />
       ) : null}
 
-      <Notice message={notice || app.error} tone={isErrorNotice(notice || app.error) ? "error" : (notice ? "success" : "info")} />
+      <Notice message={app.error} tone="error" />
 
       {view === "bookshelf" ? (
         <Section title="书架">
@@ -180,6 +181,7 @@ export default function NovelsScreen() {
             book={selected.book}
             chapters={selected.chapters}
             volumes={selected.volumes}
+            onPickCover={pickCoverImage}
           />
 
           <BookTabs activeTab={activeTab} onChange={setActiveTab} />
@@ -290,13 +292,35 @@ function BookDetailTopBar({ book, onBack, onMore }: { book: Book; onBack: () => 
   );
 }
 
-function BookHero({ book, chapters, volumes }: { book: Book; chapters: ChapterFile[]; volumes: Volume[] }) {
+async function pickCoverImage(): Promise<string | null> {
+  try {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permissionResult.granted) {
+      return null;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [3, 4],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const uri = result.assets[0].uri;
+      return uri;
+    }
+  } catch {
+    // silently fail
+  }
+  return null;
+}
+
+function BookHero({ book, chapters, volumes, onPickCover }: { book: Book; chapters: ChapterFile[]; volumes: Volume[]; onPickCover: () => Promise<string | null> }) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
     <View style={styles.bookHero}>
-      <DefaultCover title={book.title} />
+      <DefaultCover title={book.title} onPressCover={onPickCover} />
       <View style={styles.heroMeta}>
         <InfoLine label="作者" value="未知" />
         <InfoLine label="标签" value={formatStatus(book.status)} />
@@ -663,12 +687,12 @@ function BookCover({
   );
 }
 
-function DefaultCover({ title }: { title: string }) {
+function DefaultCover({ title, onPressCover }: { title: string; onPressCover: () => void }) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
-    <View style={styles.defaultCover}>
+    <Pressable onPress={onPressCover} style={styles.defaultCover}>
       <View style={styles.ribbon}>
         <Text style={styles.ribbonText}>新作品</Text>
       </View>
@@ -679,8 +703,12 @@ function DefaultCover({ title }: { title: string }) {
         <View style={[styles.mountain, { borderBottomColor: colors.accentSoft }]} />
         <View style={[styles.mountainSmall, { borderBottomColor: colors.accent }]} />
       </View>
+      <View style={styles.coverPickerHint}>
+        <Ionicons name="image-outline" size={16} color={colors.muted} />
+        <Text style={styles.coverPickerText}>点击换封面</Text>
+      </View>
       <Text numberOfLines={1} style={styles.hiddenCoverTitle}>{title}</Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -878,6 +906,24 @@ function createStyles(colors: ThemeColors) {
       color: "transparent",
       fontSize: 1,
       position: "absolute"
+    },
+    coverPickerHint: {
+      alignItems: "center",
+      bottom: 8,
+      flexDirection: "row",
+      gap: 4,
+      justifyContent: "center",
+      position: "absolute",
+      right: 8,
+      backgroundColor: "rgba(255,255,255,0.7)",
+      borderRadius: 10,
+      paddingHorizontal: 6,
+      paddingVertical: 3
+    },
+    coverPickerText: {
+      color: colors.muted,
+      fontSize: 11,
+      fontWeight: "600"
     },
     heroMeta: {
       flex: 1,
