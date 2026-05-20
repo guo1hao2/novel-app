@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { ApiProvider, ChatMessage, ChapterFile, MaterialFile, MaterialKind, SkillTemplate, Volume } from "../types";
+import type { ApiProvider, ChatMessage, ChapterFile, Conversation, MaterialFile, MaterialKind, SkillTemplate, Volume } from "../types";
 import {
   appendToChapter,
   createBook,
@@ -26,7 +26,7 @@ import {
   type LibraryState
 } from "../features/library/localLibrary";
 import { DEFAULT_PROVIDER } from "../features/settings/defaultProvider";
-import { appendChatMessage, deleteProvider as deleteProviderRepo, loadAllProviders, loadLibraryState, loadProvider, saveProvider, setActiveProvider as setActiveProviderRepo } from "../storage/sqliteRepository";
+import { appendChatMessage, createConversation, deleteConversation as deleteConversationFromDb, deleteProvider as deleteProviderRepo, loadAllProviders, loadConversationMessages, loadConversations, loadLibraryState, loadProvider, saveProvider, setActiveProvider as setActiveProviderRepo, updateConversationTitle } from "../storage/sqliteRepository";
 import { deleteBook as deleteBookPersist, deleteVolumePersist, loadChapterContent as fetchChapterContent, saveBook, saveChapter, saveMaterial, saveSkill, saveVolume as saveVolumePersist, updateChapterSummary as persistChapterSummary } from "../storage/incrementalRepository";
 import {
   createInitialOnboardingConversation,
@@ -90,6 +90,12 @@ type AppContextValue = {
   setOnboarding: (conversation: OnboardingConversation) => void;
   resetOnboarding: () => void;
   switchProvider: (id: string) => Promise<void>;
+  conversations: Conversation[];
+  currentConversationId: string | null;
+  selectConversation: (id: string) => Promise<void>;
+  createNewConversation: () => Promise<void>;
+  deleteCurrentConversation: (id: string) => Promise<void>;
+  refreshConversations: () => Promise<void>;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -106,6 +112,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [chapterSelection, setSelection] = useState<TextSelection>({ chapterId: "", start: 0, end: 0 });
   const [providers, setProviders] = useState<ApiProvider[]>([]);
   const [onboarding, setOnboarding] = useState<OnboardingConversation>(() => createInitialOnboardingConversation());
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -126,6 +134,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSelectedChapterId(firstChapter?.id ?? "");
         setSelectedMaterialId(firstMaterial?.id ?? "");
         setProviders(allProviders);
+        if (firstBook) {
+          const loadedConvs = await loadConversations(firstBook.id);
+          if (isMounted) setConversations(loadedConvs);
+        }
       } catch (caught) {
         if (isMounted) {
           setErrorState(caught instanceof Error ? caught.message : "本地数据初始化失败。");
@@ -315,6 +327,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSelectedBookId(bookId);
         setSelectedChapterId(firstChapter?.id ?? "");
         setSelectedMaterialId(firstMaterial?.id ?? "");
+        setCurrentConversationId(null);
+        void loadConversations(bookId).then(setConversations);
         if (firstChapter && !firstChapter.isLoaded) {
           void loadChapterContent(firstChapter.id);
         }
@@ -398,11 +412,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (updated) await saveMaterial(updated);
       },
       setOnboarding,
-      resetOnboarding: () => setOnboarding(createInitialOnboardingConversation())
+      resetOnboarding: () => setOnboarding(createInitialOnboardingConversation()),
+      conversations,
+      currentConversationId,
+      selectConversation: async (id) => {
+        setCurrentConversationId(id);
+      },
+      createNewConversation: async () => {
+        const id = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const bookId = selectedBookId;
+        const conv = await createConversation(id, bookId, "");
+        setConversations((prev) => [conv, ...prev]);
+        setCurrentConversationId(id);
+      },
+      deleteCurrentConversation: async (id) => {
+        await deleteConversationFromDb(id);
+        const next = conversations.filter((c) => c.id !== id);
+        setConversations(next);
+        if (currentConversationId === id) {
+          setCurrentConversationId(next[0]?.id ?? null);
+        }
+      },
+      refreshConversations: async () => {
+        if (!selectedBookId) return;
+        const loaded = await loadConversations(selectedBookId);
+        setConversations(loaded);
+      }
     }),
     [
       apiKey,
       chapterSelection,
+      conversations,
+      currentConversationId,
       error,
       isReady,
       library,
