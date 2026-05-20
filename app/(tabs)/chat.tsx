@@ -16,6 +16,8 @@ import {
   Section,
   TopBar
 } from "../../src/components/Ui";
+import { HistorySidebar } from "../../src/components/HistorySidebar";
+import { loadConversationMessages, updateConversationTitle } from "../../src/storage/sqliteRepository";
 import { getSelectedBookData, useApp } from "../../src/context/AppContext";
 import { useTheme } from "../../src/context/ThemeContext";
 import { requestChatCompletion, requestChatCompletionStream } from "../../src/features/ai/apiClient";
@@ -67,7 +69,8 @@ export default function ChatScreen() {
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState<string[]>([]);
-  const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
+  const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [loadedMessages, setLoadedMessages] = useState<ChatMessage[]>([]);
   const [notice, setNotice] = useState("");
   const [pendingOption, setPendingOption] = useState<OnboardingReplyOption | null>(null);
   const [replyOptions, setReplyOptions] = useState<OnboardingReplyOption[]>([]);
@@ -113,6 +116,14 @@ export default function ChatScreen() {
     }
   }, [app, app.isReady, app.selectedBookId, mode, routeBook, routeBookId, router]);
 
+  useEffect(() => {
+    if (mode !== "continue" || !app.currentConversationId) {
+      setLoadedMessages([]);
+      return;
+    }
+    loadConversationMessages(app.currentConversationId).then(setLoadedMessages);
+  }, [app.currentConversationId, mode]);
+
   function startCreateBook() {
     setNotice("");
     setComposerValue("");
@@ -132,15 +143,6 @@ export default function ChatScreen() {
     setNotice("");
     setComposerValue("");
     router.push("/chat");
-  }
-
-  function chooseContinueBook(bookId: string) {
-    app.selectBook(bookId);
-    setAssistantDraft("");
-    setComposerValue("");
-    setLocalMessages([]);
-    setNotice("");
-    router.push(`/chat?mode=continue&bookId=${encodeURIComponent(bookId)}`);
   }
 
   async function sendComposerValue(value = composerValue) {
@@ -338,7 +340,7 @@ export default function ChatScreen() {
       });
       setNotice("书本已创建，资料库也已经写入，可以开始续写。");
       app.resetOnboarding();
-      setLocalMessages([]);
+      setLoadedMessages([]);
       router.push(`/chat?mode=continue&bookId=${encodeURIComponent(bookId)}`);
     } catch (caught) {
       setNotice(caught instanceof Error ? caught.message : "创建书本失败。");
@@ -350,8 +352,8 @@ export default function ChatScreen() {
   async function sendContinueMessage(rawValue: string) {
     const instruction = rawValue.trim();
     if (!instruction) return;
-    if (!routeBook || !activeBookReady || !selected.chapter || !selectedSkill) {
-      setNotice("请先选择书本和章节。");
+    if (!routeBook || !activeBookReady || !selectedSkill || !app.currentConversationId) {
+      setNotice("请先选择书本、技能，并确保有活动对话。");
       return;
     }
     if (!hasApiKey) {
@@ -359,6 +361,7 @@ export default function ChatScreen() {
       return;
     }
 
+    const targetChapter = selected.chapters[selected.chapters.length - 1];
     setComposerValue("");
     setNotice("");
     setIsThinking(true);
@@ -367,15 +370,26 @@ export default function ChatScreen() {
     setThinkingSteps(["读取资料库"]);
     const previousDraft = assistantDraft.trim();
     setAssistantDraft("");
-    const userMessage = createMessage(routeBook.id, "user", instruction);
-    setLocalMessages((messages) => [...messages, userMessage]);
+    const userMessage = createMessage(routeBook.id, app.currentConversationId, "user", instruction);
+    setLoadedMessages((messages) => [...messages, userMessage]);
 
     try {
       await app.persistChatMessage(userMessage);
+
+      // Auto-title logic
+      if (app.currentConversationId) {
+        const conv = app.conversations.find((c) => c.id === app.currentConversationId);
+        if (conv && !conv.title) {
+          const autoTitle = instruction.slice(0, 20) + (instruction.length > 20 ? "..." : "");
+          await updateConversationTitle(app.currentConversationId, autoTitle);
+          await app.refreshConversations();
+        }
+      }
+
       const materials = await app.ensureBookMaterials(routeBook.id);
       const materialInput = {
         bookTitle: routeBook.title,
-        chapterTitle: selected.chapter.title,
+        chapterTitle: targetChapter.title,
         worldbuilding: getMaterialContentFromFiles(materials, "worldbuilding"),
         characters: getMaterialContentFromFiles(materials, "characters"),
         plotOutline: getMaterialContentFromFiles(materials, "plotOutline"),
@@ -390,16 +404,16 @@ export default function ChatScreen() {
           apiKey: app.apiKey,
           messages: buildMaterialUpdateMessages({
             ...materialInput,
-            confirmedChapterContent: selected.chapter.content,
+            confirmedChapterContent: targetChapter.content,
             userInstruction: `${selectedSkill.prompt}\n\n${instruction}`.trim()
           }),
           responseFormat: { type: "json_object" }
         });
         const materialUpdate = parseMaterialUpdateResult(materialContent);
         await app.setBookMaterialContents(routeBook.id, materialUpdate);
-        const assistantMessage = createMessage(routeBook.id, "assistant", "资料库已根据当前章节更新。");
+        const assistantMessage = createMessage(routeBook.id, app.currentConversationId, "assistant", "资料库已根据当前章节更新。");
         await app.persistChatMessage(assistantMessage);
-        setLocalMessages((messages) => [...messages, assistantMessage]);
+        setLoadedMessages((messages) => [...messages, assistantMessage]);
         setNotice("资料库已更新。");
         addThinkingStep("资料库已更新");
         setIsThinking(false);
@@ -418,7 +432,7 @@ export default function ChatScreen() {
           summary: chapter.summary ?? "",
           order: chapter.order
         })),
-        currentChapterContent: selected.chapter.content,
+        currentChapterContent: targetChapter.content,
         skillName: selectedSkill.name,
         skillPrompt: selectedSkill.prompt,
         previousDraft
@@ -435,9 +449,9 @@ export default function ChatScreen() {
             setAssistantDraft((prev) => prev + token);
           },
           async onComplete(fullText) {
-            const assistantMessage = createMessage(routeBook.id, "assistant", fullText);
+            const assistantMessage = createMessage(routeBook.id, app.currentConversationId ?? "", "assistant", fullText);
             await app.persistChatMessage(assistantMessage);
-            setLocalMessages((messages) => [...messages, assistantMessage]);
+            setLoadedMessages((messages) => [...messages, assistantMessage]);
             setAssistantDraft(fullText);
             pendingDraftRef.current = { instruction, action: selectedSkill.action };
             setIsGenerating(false);
@@ -467,7 +481,8 @@ export default function ChatScreen() {
   }
 
   async function confirmDraft() {
-    if (!selected.chapter || !assistantDraft) return;
+    const targetChapter = selected.chapters[selected.chapters.length - 1];
+    if (!targetChapter || !assistantDraft) return;
     const draft = assistantDraft;
     const pending = pendingDraftRef.current;
     const action = pending?.action ?? selectedSkill?.action ?? "appendText";
@@ -476,11 +491,11 @@ export default function ChatScreen() {
     try {
       let confirmedChapterContent = "";
       if (action === "appendText") {
-        confirmedChapterContent = appendDraftToContent(selected.chapter.content, draft);
-        await app.appendAssistantText(selected.chapter.id, draft);
+        confirmedChapterContent = appendDraftToContent(targetChapter.content, draft);
+        await app.appendAssistantText(targetChapter.id, draft);
       } else if (action === "replaceSelection") {
-        confirmedChapterContent = replaceDraftInContent(selected.chapter.id, selected.chapter.content, app.chapterSelection, draft);
-        await app.replaceSelectedChapterText(selected.chapter.id, draft);
+        confirmedChapterContent = replaceDraftInContent(targetChapter.id, targetChapter.content, app.chapterSelection, draft);
+        await app.replaceSelectedChapterText(targetChapter.id, draft);
       } else if (action === "chatOnly") {
         setAssistantDraft("");
         pendingDraftRef.current = null;
@@ -500,7 +515,8 @@ export default function ChatScreen() {
   }
 
   async function syncMaterialsAfterConfirmedText(confirmedChapterContent: string, instruction: string) {
-    if (!routeBook || !selected.chapter) return;
+    const targetChapter = selected.chapters[selected.chapters.length - 1];
+    if (!routeBook || !targetChapter) return;
     try {
       const materials = await app.ensureBookMaterials(routeBook.id);
       const materialContent = await requestChatCompletion({
@@ -508,7 +524,7 @@ export default function ChatScreen() {
         apiKey: app.apiKey,
         messages: buildMaterialUpdateMessages({
           bookTitle: routeBook.title,
-          chapterTitle: selected.chapter.title,
+          chapterTitle: targetChapter.title,
           worldbuilding: getMaterialContentFromFiles(materials, "worldbuilding"),
           characters: getMaterialContentFromFiles(materials, "characters"),
           plotOutline: getMaterialContentFromFiles(materials, "plotOutline"),
@@ -576,6 +592,13 @@ export default function ChatScreen() {
       </View>
     ) : mode === "continue" && routeBook && activeBookReady ? (
       <View style={styles.footerStack}>
+        {app.library.skills.length > 0 ? (
+          <HorizontalList>
+            {app.library.skills.map((skill) => (
+              <Pill key={skill.id} title={skill.name} active={(selectedSkill?.id ?? selectedSkillId) === skill.id} onPress={() => setSelectedSkillId(skill.id)} />
+            ))}
+          </HorizontalList>
+        ) : null}
         {assistantDraft ? (
           <Pressable accessibilityRole="button" onPress={confirmDraft} style={({ pressed }) => [styles.confirmDraftButton, pressed ? styles.replyOptionPressed : null]}>
             <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
@@ -583,7 +606,7 @@ export default function ChatScreen() {
           </Pressable>
         ) : null}
         <ChatComposer
-          disabled={isGenerating || isThinking}
+          disabled={isGenerating || isThinking || !app.currentConversationId}
           leadingAccessory={<ImagePlaceholderButton onPress={showImagePlaceholder} />}
           loading={isGenerating || isThinking}
           onChangeText={setComposerValue}
@@ -625,7 +648,33 @@ export default function ChatScreen() {
           ) : undefined
         }
       >
-        {mode !== "createBook" ? (
+        {mode === "continue" && routeBook && activeBookReady ? (
+          <TopBar
+            title="续写"
+            subtitle={routeBook.title}
+            left={
+              <IconButton
+                accessibilityLabel="返回入口"
+                icon={<Ionicons name="chevron-back" size={22} color={colors.text} />}
+                onPress={returnToEntry}
+              />
+            }
+            right={
+              <View style={{ flexDirection: "row", gap: 4 }}>
+                <IconButton
+                  accessibilityLabel="新建对话"
+                  icon={<Ionicons name="add-circle-outline" size={22} color={colors.primary} />}
+                  onPress={() => void app.createNewConversation()}
+                />
+                <IconButton
+                  accessibilityLabel="历史对话"
+                  icon={<Ionicons name="time-outline" size={22} color={colors.text} />}
+                  onPress={() => setSidebarVisible(true)}
+                />
+              </View>
+            }
+          />
+        ) : mode !== "createBook" ? (
           <TopBar
             title={title}
             subtitle={subtitle}
@@ -698,76 +747,55 @@ export default function ChatScreen() {
 
         {mode === "continue" && !routeBook ? (
           <View style={styles.chatSurface}>
-            <ChatBubble role="assistant">
-              {app.library.books.length ? "先选一本要续写的书。选中后我会读取它的章节和资料库。" : "现在还没有书本。先新建一本，我会把设定写进资料库，再帮你续写。"}
-            </ChatBubble>
-            {app.library.books.length ? (
-              <View style={styles.bookPickList}>
-                {app.library.books.map((book) => (
-                  <CardButton
-                    key={book.id}
-                    title={book.title}
-                    body={book.summary || "暂无简介"}
-                    onPress={() => chooseContinueBook(book.id)}
-                    icon={<Ionicons name="book-outline" size={22} color={colors.accent} />}
-                  />
-                ))}
-              </View>
-            ) : (
-              <Button title="去新建书本" onPress={startCreateBook} />
-            )}
+            <ChatBubble role="assistant">请先在书架中选择一本书。</ChatBubble>
+            <Button title="去书架选择" onPress={() => router.replace("/(tabs)/novels")} />
           </View>
         ) : null}
 
         {mode === "continue" && routeBook && activeBookReady ? (
-          <View style={styles.chatSurface}>
-            <Section title="上下文">
-              <HorizontalList>
-                {app.library.books.map((book) => (
-                  <Pill key={book.id} title={book.title} active={book.id === routeBook.id} onPress={() => chooseContinueBook(book.id)} />
+          <>
+            <View style={styles.chatSurface}>
+              <View style={styles.messages}>
+                {!app.currentConversationId ? (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyText}>选择技能，输入指令开始创作</Text>
+                  </View>
+                ) : loadedMessages.length === 0 && !isGenerating && !isThinking ? (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyText}>输入指令开始创作</Text>
+                  </View>
+                ) : null}
+                {loadedMessages.map((message) => (
+                  <ChatBubble key={message.id} role={message.role}>
+                    {message.content}
+                  </ChatBubble>
                 ))}
-              </HorizontalList>
-              <HorizontalList>
-                {selected.chapters.map((chapter) => (
-                  <Pill
-                    key={chapter.id}
-                    title={`${chapter.title} · ${chapter.content.length} 字`}
-                    active={chapter.id === selected.chapter?.id}
-                    onPress={() => app.selectChapter(chapter.id)}
+                {(isThinking || isGenerating || thinkingSteps.length > 0) ? (
+                  <ThoughtPanel
+                    active={isThinking || isGenerating}
+                    expanded={thinkingExpanded}
+                    onToggle={() => setThinkingExpanded((value) => !value)}
+                    steps={thinkingSteps}
                   />
-                ))}
-              </HorizontalList>
-              <HorizontalList>
-                {app.library.skills.map((skill) => (
-                  <Pill key={skill.id} title={skill.name} active={(selectedSkill?.id ?? selectedSkillId) === skill.id} onPress={() => setSelectedSkillId(skill.id)} />
-                ))}
-              </HorizontalList>
-            </Section>
-
-            <View style={styles.messages}>
-              {localMessages.length ? null : (
-                <ChatBubble role="assistant">{`我已经准备好读取《${routeBook.title}》的资料。告诉我你想续写、改写，还是检查节奏。`}</ChatBubble>
-              )}
-              {localMessages.map((message) => (
-                <ChatBubble key={message.id} role={message.role}>
-                  {message.content}
-                </ChatBubble>
-              ))}
-              {(isThinking || isGenerating || thinkingSteps.length > 0) ? (
-                <ThoughtPanel
-                  active={isThinking || isGenerating}
-                  expanded={thinkingExpanded}
-                  onToggle={() => setThinkingExpanded((value) => !value)}
-                  steps={thinkingSteps}
-                />
-              ) : null}
-              {assistantDraft && (isGenerating || localMessages.at(-1)?.content !== assistantDraft) ? (
-                <ChatBubble role="assistant">
-                  <Text style={styles.assistantText}>{assistantDraft}</Text>
-                </ChatBubble>
-              ) : null}
+                ) : null}
+                {assistantDraft && (isGenerating || loadedMessages.at(-1)?.content !== assistantDraft) ? (
+                  <ChatBubble role="assistant">
+                    <Text style={styles.assistantText}>{assistantDraft}</Text>
+                  </ChatBubble>
+                ) : null}
+              </View>
             </View>
-          </View>
+            <HistorySidebar
+              conversations={app.conversations}
+              currentConversationId={app.currentConversationId}
+              onSelect={(id) => void app.selectConversation(id)}
+              onDelete={(id) => void app.deleteCurrentConversation(id)}
+              onClose={() => setSidebarVisible(false)}
+              onNewConversation={() => void app.createNewConversation()}
+              bookTitle={routeBook.title}
+              visible={sidebarVisible}
+            />
+          </>
         ) : null}
       </Screen>
       <ConfirmDialog
@@ -1040,10 +1068,11 @@ function createOptionCards(values: string[]): OnboardingReplyOption[] {
   }));
 }
 
-function createMessage(bookId: string, role: "user" | "assistant", content: string): ChatMessage {
+function createMessage(bookId: string, conversationId: string, role: "user" | "assistant", content: string): ChatMessage {
   return {
     id: `message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     bookId,
+    conversationId,
     role,
     content,
     createdAt: new Date().toISOString()
@@ -1125,9 +1154,6 @@ function createStyles(colors: ThemeColors) {
       marginLeft: spacing.lg,
       marginTop: -2,
       width: "88%"
-    },
-    bookPickList: {
-      gap: spacing.sm
     },
     footerStack: {
       gap: spacing.sm
@@ -1391,6 +1417,16 @@ function createStyles(colors: ThemeColors) {
       fontWeight: "700",
       letterSpacing: 0.3,
       marginBottom: 2
+    },
+    emptyState: {
+      alignItems: "center",
+      flex: 1,
+      justifyContent: "center",
+      paddingVertical: spacing.xxl
+    },
+    emptyText: {
+      color: colors.muted,
+      fontSize: 14
     }
   });
 }
