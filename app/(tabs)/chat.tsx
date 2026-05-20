@@ -577,9 +577,10 @@ export default function ChatScreen() {
     ) : mode === "continue" && routeBook && activeBookReady ? (
       <View style={styles.footerStack}>
         {assistantDraft ? (
-          <View>
-            <Button title="确认" onPress={confirmDraft} variant="secondary" />
-          </View>
+          <Pressable accessibilityRole="button" onPress={confirmDraft} style={({ pressed }) => [styles.confirmDraftButton, pressed ? styles.replyOptionPressed : null]}>
+            <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+            <Text style={styles.confirmDraftText}>确认写入章节</Text>
+          </Pressable>
         ) : null}
         <ChatComposer
           disabled={isGenerating || isThinking}
@@ -812,22 +813,14 @@ function StepIndicator({ currentStep }: { currentStep: OnboardingStep }) {
             >
               <Ionicons
                 name={isCompleted ? "checkmark" : step.icon}
-                size={isCurrent ? 16 : 14}
+                size={isCurrent ? 15 : 12}
                 color={isCompleted || isCurrent ? "#FFFFFF" : colors.muted}
               />
             </View>
-            <Text
-              style={[
-                styles.stepLabel,
-                isCurrent ? styles.stepLabelCurrent : null,
-                isCompleted ? styles.stepLabelCompleted : null
-              ]}
-              numberOfLines={1}
-            >
-              {step.label}
-            </Text>
-            {index < ONBOARDING_STEPS.length - 1 ? (
-              <View style={[styles.stepConnector, isCompleted ? styles.stepConnectorCompleted : null]} />
+            {isCurrent ? (
+              <Text style={styles.stepLabelCurrent} numberOfLines={1}>
+                {step.label}
+              </Text>
             ) : null}
           </View>
         );
@@ -1306,24 +1299,25 @@ function createStyles(colors: ThemeColors) {
     stepIndicatorShell: {
       alignItems: "center",
       flexDirection: "row",
-      gap: 0,
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm
+      gap: spacing.xs,
+      justifyContent: "center",
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs
     },
     stepItem: {
       alignItems: "center",
       flexDirection: "row",
-      flex: 1
+      gap: 3
     },
     stepDot: {
       alignItems: "center",
       backgroundColor: colors.surfaceAlt,
       borderColor: colors.border,
-      borderRadius: 14,
+      borderRadius: 12,
       borderWidth: 1,
-      height: 28,
+      height: 24,
       justifyContent: "center",
-      width: 28
+      width: 24
     },
     stepDotCompleted: {
       backgroundColor: colors.primary,
@@ -1332,34 +1326,29 @@ function createStyles(colors: ThemeColors) {
     stepDotCurrent: {
       backgroundColor: colors.primary,
       borderColor: colors.primary,
-      borderRadius: 16,
-      height: 32,
-      width: 32
-    },
-    stepLabel: {
-      color: colors.muted,
-      fontSize: 11,
-      fontWeight: "600",
-      marginLeft: spacing.xs,
-      marginRight: spacing.xs
+      borderRadius: 15,
+      height: 30,
+      width: 30
     },
     stepLabelCurrent: {
       color: colors.primary,
       fontSize: 12,
       fontWeight: "800"
     },
-    stepLabelCompleted: {
-      color: colors.text
+    confirmDraftButton: {
+      alignItems: "center",
+      backgroundColor: colors.primary,
+      borderRadius: 999,
+      flexDirection: "row",
+      gap: spacing.xs,
+      justifyContent: "center",
+      minHeight: 44,
+      paddingHorizontal: spacing.xl
     },
-    stepConnector: {
-      backgroundColor: colors.border,
-      borderRadius: 1,
-      flex: 1,
-      height: 2,
-      marginHorizontal: 2
-    },
-    stepConnectorCompleted: {
-      backgroundColor: colors.primary
+    confirmDraftText: {
+      color: "#FFFFFF",
+      fontSize: 15,
+      fontWeight: "800"
     },
     assistantRow: {
       alignItems: "flex-start",
