@@ -172,6 +172,46 @@ const MIGRATIONS: Migration[] = [
         "UPDATE api_providers SET vendor = 'openai' WHERE base_url NOT LIKE '%deepseek%'"
       );
     }
+  },
+  {
+    version: 9,
+    description: "add conversations table and conversation_id to chat_messages",
+    up: async (db) => {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS conversations (
+          id TEXT PRIMARY KEY NOT NULL,
+          book_id TEXT NOT NULL,
+          title TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversations_book_id ON conversations(book_id);
+      `);
+      try {
+        await db.execAsync(`
+          ALTER TABLE chat_messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT '';
+        `);
+      } catch {
+        // Column may already exist
+      }
+      // Migrate existing messages: create default conversation for each book
+      const bookRows = await db.getAllAsync<{ book_id: string }>(
+        "SELECT DISTINCT book_id FROM chat_messages WHERE conversation_id = '' OR conversation_id IS NULL",
+        []
+      );
+      const now = new Date().toISOString();
+      for (const book of bookRows) {
+        const conversationId = `conv-default-${book.book_id}`;
+        await db.runAsync(
+          "INSERT INTO conversations (id, book_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+          [conversationId, book.book_id, "默认对话", now, now]
+        );
+        await db.runAsync(
+          "UPDATE chat_messages SET conversation_id = ? WHERE book_id = ?",
+          [conversationId, book.book_id]
+        );
+      }
+    }
   }
 ];
 
