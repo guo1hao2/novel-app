@@ -10,9 +10,10 @@ vi.mock("expo-secure-store", () => ({
 type MockDatabase = typeof import("./mocks/expoSqlite").mockDatabase;
 
 function mockInitializedDatabase(db: MockDatabase) {
-  db.getFirstAsync.mockImplementation(async (sql: string) => {
+  db.getFirstAsync.mockImplementation(async (sql: string, params?: unknown[]) => {
     if (sql.includes("name = 'schema_version'")) return { name: "schema_version" };
     if (sql.includes("SELECT version FROM schema_version")) return { version: 8 };
+    if (sql.includes("name = ?")) return { name: String(params?.[0] ?? "") };
     if (sql.includes("SELECT COUNT(*) as count FROM books")) return { count: 1 };
     if (sql.includes("SELECT COUNT(*) as count FROM skills")) return { count: 1 };
     return null;

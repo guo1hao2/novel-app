@@ -745,7 +745,7 @@ export default function ChatScreen() {
 
             <View style={styles.messages}>
               {localMessages.length ? null : (
-                <ChatBubble role="assistant">我已经准备好读取《{routeBook.title}》的资料。告诉我你想续写、改写，还是检查节奏。</ChatBubble>
+                <ChatBubble role="assistant">{`我已经准备好读取《${routeBook.title}》的资料。告诉我你想续写、改写，还是检查节奏。`}</ChatBubble>
               )}
               {localMessages.map((message) => (
                 <ChatBubble key={message.id} role={message.role}>

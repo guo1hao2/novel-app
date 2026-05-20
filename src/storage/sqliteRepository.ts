@@ -4,7 +4,7 @@ import { createDefaultSkills, normalizeSkillAction, type LibraryState } from "..
 import { DEFAULT_PROVIDER } from "../features/settings/defaultProvider";
 import { normalizeMaxTokens } from "../features/settings/maxTokens";
 import { createSingleFlight, createWriteQueue } from "./storageGuards";
-import { runMigrations } from "./migrations";
+import { getLatestVersion, runMigrations } from "./migrations";
 import { mapLegacyRowsToLibraryState } from "./legacyMigration";
 import { normalizeSecureStoreKey } from "./secureApiKey";
 import { loadWebLibraryState, saveWebLibraryState } from "./webLibraryMirror";
@@ -130,14 +130,14 @@ export async function resetDatabase(): Promise<SQLite.SQLiteDatabase> {
 export const initializeDatabaseOnce = createSingleFlight(async () => {
   try {
     const database = await getDatabase();
-    await runMigrations(database);
+    await migrateAndRepairSchema(database);
     await migrateLegacyTablesIfNeeded(database);
     await insertDefaultSkills(database);
     await insertDefaultProvider(database);
   } catch {
     databasePromise = null;
     const database = await resetDatabase();
-    await runMigrations(database);
+    await migrateAndRepairSchema(database);
     await insertDefaultSkills(database);
     await insertDefaultProvider(database);
   }
@@ -146,6 +146,20 @@ export const initializeDatabaseOnce = createSingleFlight(async () => {
 
 export async function loadLibraryState(): Promise<LibraryState> {
   await initializeDatabaseOnce();
+  try {
+    return await readLibraryState();
+  } catch (caught) {
+    if (!isMissingTableError(caught)) throw caught;
+    const database = await getDatabase();
+    await repairCoreSchema(database);
+    await assertCoreSchema(database);
+    await insertDefaultSkills(database);
+    await insertDefaultProvider(database);
+    return readLibraryState();
+  }
+}
+
+async function readLibraryState(): Promise<LibraryState> {
   const database = await getDatabase();
   const [bookRows, volumeRows, chapterRows, materialRows, skillRows] = await Promise.all([
     database.getAllAsync<BookRow>("SELECT * FROM books ORDER BY updated_at DESC", []),
@@ -509,6 +523,152 @@ async function insertDefaultProvider(database: SQLite.SQLiteDatabase): Promise<v
       DEFAULT_PROVIDER.apiKeyStorageKey
     ]
   );
+}
+
+async function migrateAndRepairSchema(database: SQLite.SQLiteDatabase): Promise<void> {
+  try {
+    await runMigrations(database);
+  } catch (caught) {
+    if (!isRecoverableSchemaError(caught)) throw caught;
+  }
+  await repairCoreSchema(database);
+  await assertCoreSchema(database);
+}
+
+async function repairCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> {
+  try { await database.execAsync("PRAGMA journal_mode = WAL;"); } catch {}
+  const schemaStatements = [
+    `CREATE TABLE IF NOT EXISTS books (
+      id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      status TEXT NOT NULL,
+      cover_color TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS volumes (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS chapter_files (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      volume_id TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      summary TEXT NOT NULL DEFAULT '',
+      summary_updated_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS material_files (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      fields TEXT NOT NULL DEFAULT '[]',
+      tags TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      action TEXT NOT NULL DEFAULT 'appendText',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS api_providers (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      vendor TEXT NOT NULL DEFAULT 'deepseek',
+      base_url TEXT NOT NULL,
+      model TEXT NOT NULL,
+      temperature REAL NOT NULL,
+      max_tokens INTEGER NOT NULL,
+      api_key_storage_key TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 0
+    )`,
+    `CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY NOT NULL
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_chapter_files_book_id ON chapter_files(book_id)",
+    "CREATE INDEX IF NOT EXISTS idx_material_files_book_id ON material_files(book_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_messages_book_id ON chat_messages(book_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chapter_files_sort ON chapter_files(book_id, sort_order)",
+    "CREATE INDEX IF NOT EXISTS idx_volumes_book_id ON volumes(book_id)"
+  ];
+  for (const statement of schemaStatements) {
+    await database.execAsync(statement);
+  }
+  const columnRepairs: Array<[string, string]> = [
+    ["books", "cover_color TEXT NOT NULL DEFAULT ''"],
+    ["chapter_files", "volume_id TEXT NOT NULL DEFAULT ''"],
+    ["chapter_files", "summary TEXT NOT NULL DEFAULT ''"],
+    ["chapter_files", "summary_updated_at TEXT NOT NULL DEFAULT ''"],
+    ["material_files", "fields TEXT NOT NULL DEFAULT '[]'"],
+    ["material_files", "tags TEXT NOT NULL DEFAULT '[]'"],
+    ["skills", "action TEXT NOT NULL DEFAULT 'appendText'"],
+    ["api_providers", "vendor TEXT NOT NULL DEFAULT 'deepseek'"],
+    ["api_providers", "is_active INTEGER NOT NULL DEFAULT 0"]
+  ];
+  for (const [tableName, columnDefinition] of columnRepairs) {
+    await addColumnIfMissing(database, tableName, columnDefinition);
+  }
+  await database.runAsync("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", [getLatestVersion()]);
+}
+
+async function addColumnIfMissing(database: SQLite.SQLiteDatabase, tableName: string, columnDefinition: string): Promise<void> {
+  try {
+    await database.execAsync(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition};`);
+  } catch {}
+}
+
+async function assertCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> {
+  const requiredTables = [
+    "books",
+    "chapter_files",
+    "material_files",
+    "skills",
+    "chat_messages",
+    "api_providers",
+    "volumes",
+    "schema_version"
+  ];
+  const missingTables: string[] = [];
+  for (const tableName of requiredTables) {
+    if (!(await tableExists(database, tableName))) {
+      missingTables.push(tableName);
+    }
+  }
+  if (missingTables.length) {
+    throw new Error(`Database schema is incomplete; missing tables: ${missingTables.join(", ")}`);
+  }
+}
+
+function isMissingTableError(caught: unknown): boolean {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  return /no such table/i.test(message);
+}
+
+function isRecoverableSchemaError(caught: unknown): boolean {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  return /no such table|duplicate column/i.test(message);
 }
 
 async function tableExists(database: SQLite.SQLiteDatabase, tableName: string): Promise<boolean> {

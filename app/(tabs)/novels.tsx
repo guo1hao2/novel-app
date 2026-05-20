@@ -1,17 +1,20 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { Button, CardButton, ConfirmDialog, Field, FileRow, HorizontalList, IconButton, Notice, Pill, Row, Screen, Section, TopBar } from "../../src/components/Ui";
+import { Button, ConfirmDialog, Field, HorizontalList, Notice, Pill, Screen, Section, TopBar } from "../../src/components/Ui";
 import { getSelectedBookData, useApp } from "../../src/context/AppContext";
+import { getCreateActionMenuItems, type CreateActionKey } from "../../src/features/library/bookManagerView";
 import { useTheme } from "../../src/context/ThemeContext";
 import { spacing, type ThemeColors } from "../../src/theme";
-import type { Book, ChapterFile, Volume } from "../../src/types";
+import type { Book, ChapterFile, MaterialFile, Volume } from "../../src/types";
 
-type ManagerView = "bookshelf" | "book" | "chapters" | "materials";
+type ManagerView = "bookshelf" | "book";
+type BookTab = "catalog" | "related" | "manage";
+type CreateDialogType = CreateActionKey | null;
 
 const BOOK_COVER_WIDTH = "46.5%";
-const PALETTE = ["#4A90D9", "#E67E22", "#27AE60", "#8E44AD", "#E74C3C", "#1ABC9C", "#F39C12", "#2C3E50"];
+const PALETTE = ["#0F8B6C", "#4A90D9", "#E67E22", "#27AE60", "#8E44AD", "#E74C3C", "#1ABC9C", "#2C3E50"];
 
 function bookColor(book: Book): string {
   let hash = 0;
@@ -28,6 +31,9 @@ export default function NovelsScreen() {
   const [targetVolumeId, setTargetVolumeId] = useState("");
   const [notice, setNotice] = useState("");
   const [view, setView] = useState<ManagerView>("bookshelf");
+  const [activeTab, setActiveTab] = useState<BookTab>("catalog");
+  const [createActionsOpen, setCreateActionsOpen] = useState(false);
+  const [createDialog, setCreateDialog] = useState<CreateDialogType>(null);
   const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
   const [deletingVolumeId, setDeletingVolumeId] = useState<string | null>(null);
   const [expandedVolumes, setExpandedVolumes] = useState<Set<string>>(new Set());
@@ -41,29 +47,56 @@ export default function NovelsScreen() {
   const deletingVolume = deletingVolumeId ? selected.volumes.find((v) => v.id === deletingVolumeId) : null;
 
   async function createNewChapter() {
-    if (!selected.book || !targetVolumeId) return;
-    await app.addChapter(selected.book.id, targetVolumeId, newChapterTitle);
+    if (!selected.book) return;
+    const volumeId = targetVolumeId || selected.volumes[0]?.id;
+    if (!volumeId) {
+      setNotice("请先新建分卷。");
+      return;
+    }
+
+    await app.addChapter(selected.book.id, volumeId, newChapterTitle.trim() || `第${selected.chapters.length + 1}章`);
     setNewChapterTitle("");
+    setCreateDialog(null);
     setNotice("章节已添加。");
-    setExpandedVolumes((prev) => new Set(prev).add(targetVolumeId));
+    setActiveTab("catalog");
+    setExpandedVolumes((prev) => new Set(prev).add(volumeId));
   }
 
   async function createNewVolume() {
     if (!selected.book) return;
-    await app.addVolume(selected.book.id, newVolumeTitle);
+    const volumeId = await app.addVolume(selected.book.id, newVolumeTitle.trim() || `第${selected.volumes.length + 1}卷`);
     setNewVolumeTitle("");
-    setNotice("卷已添加。");
+    setTargetVolumeId(volumeId);
+    setCreateDialog(null);
+    setNotice("分卷已添加。");
+    setActiveTab("catalog");
+    setExpandedVolumes((prev) => new Set(prev).add(volumeId));
   }
 
   function openBook(bookId: string) {
     app.selectBook(bookId);
     setView("book");
+    setActiveTab("catalog");
+    setCreateActionsOpen(false);
     setNotice("");
   }
 
   function goBack() {
-    setView(view === "book" ? "bookshelf" : "book");
+    setView("bookshelf");
+    setCreateActionsOpen(false);
+    setCreateDialog(null);
     setNotice("");
+  }
+
+  function openCreateDialog(type: CreateActionKey) {
+    setCreateActionsOpen(false);
+    setCreateDialog(type);
+    if (type === "chapter") {
+      setTargetVolumeId(targetVolumeId || selected.volumes[0]?.id || "");
+      setNewChapterTitle(`第${selected.chapters.length + 1}章`);
+    } else {
+      setNewVolumeTitle(`第${selected.volumes.length + 1}卷`);
+    }
   }
 
   async function handleDeleteBook() {
@@ -78,7 +111,7 @@ export default function NovelsScreen() {
     if (!deletingVolumeId) return;
     await app.deleteVolume(deletingVolumeId);
     setDeletingVolumeId(null);
-    setNotice("卷已删除。");
+    setNotice("分卷已删除。");
   }
 
   function toggleVolume(volumeId: string) {
@@ -90,21 +123,28 @@ export default function NovelsScreen() {
     });
   }
 
-  return (
-    <Screen>
-      <TopBar
-        title={view === "bookshelf" ? "书架" : selected.book?.title ?? "书本"}
-        subtitle={view === "bookshelf" ? "你的长篇项目库" : view === "book" ? "设定、章节和资料" : view === "chapters" ? "正文" : "资料库"}
-        left={
-          view !== "bookshelf" ? (
-            <IconButton
-              accessibilityLabel={view === "book" ? "返回书架" : "返回书本"}
-              icon={<Ionicons name="chevron-back" size={22} color={colors.text} />}
-              onPress={goBack}
-            />
-          ) : null
-        }
+  const floatingAction = selected.book && view === "book"
+    ? (
+      <CreateFloatingAction
+        isOpen={createActionsOpen}
+        onAction={openCreateDialog}
+        onToggle={() => setCreateActionsOpen((open) => !open)}
       />
+    )
+    : null;
+
+  return (
+    <Screen floatingAction={floatingAction}>
+      {view === "bookshelf" ? (
+        <TopBar title="书架" subtitle={`${app.library.books.length} 部作品`} />
+      ) : selected.book ? (
+        <BookDetailTopBar
+          book={selected.book}
+          onBack={goBack}
+          onMore={() => setActiveTab("manage")}
+        />
+      ) : null}
+
       <Notice message={notice || app.error} tone={isErrorNotice(notice || app.error) ? "error" : (notice ? "success" : "info")} />
 
       {view === "bookshelf" ? (
@@ -123,224 +163,88 @@ export default function NovelsScreen() {
               ))}
             </View>
           ) : (
-            <Text style={styles.emptyHint}>书架为空，去 AI 对话创建第一本书吧</Text>
+            <View style={styles.emptyState}>
+              <Ionicons name="library-outline" size={34} color={colors.accent} />
+              <Text style={styles.emptyTitle}>暂无作品</Text>
+              <Text style={styles.emptyHint}>去 AI 对话创建第一本书，之后会出现在这里。</Text>
+            </View>
           )}
         </Section>
       ) : null}
 
       {view === "book" && selected.book ? (
         <>
-          <Section title="书本信息">
-            <View style={styles.metaBox}>
-              <View style={styles.metaHeader}>
-                <View style={[styles.metaCover, { backgroundColor: bookColor(selected.book) }]}>
-                  <Text numberOfLines={2} style={styles.metaCoverTitle}>
-                    {selected.book.title}
-                  </Text>
-                </View>
-                <View style={styles.metaInfo}>
-                  <Text style={styles.metaTitle}>{selected.book.title}</Text>
-                  <Text style={styles.metaText}>{selected.volumes.length} 卷 · {selected.chapters.length} 章 · {countWords(selected.chapters)} 字</Text>
-                </View>
-              </View>
-            </View>
+          <BookHero
+            book={selected.book}
+            chapters={selected.chapters}
+            volumes={selected.volumes}
+          />
 
-            <Field
-              label="书名"
-              value={selected.book.title}
-              onChangeText={(value) => app.setBookTitle(selected.book!.id, value)}
-              accessibilityLabel="编辑书名"
+          <BookTabs activeTab={activeTab} onChange={setActiveTab} />
+
+          {activeTab === "catalog" ? (
+            <CatalogPanel
+              chapters={selected.chapters}
+              colors={colors}
+              deletingVolumeId={deletingVolumeId}
+              expandedVolumes={expandedVolumes}
+              onDeleteVolume={setDeletingVolumeId}
+              onSelectChapter={app.selectChapter}
+              onToggleVolume={toggleVolume}
+              selectedChapter={selected.chapter}
+              setChapterContent={app.setChapterContent}
+              setChapterSelection={app.setChapterSelection}
+              setChapterTitle={app.setChapterTitle}
+              styles={styles}
+              volumes={selected.volumes}
             />
+          ) : null}
 
-            <Field
-              label="简介"
-              multiline
-              value={selected.book.summary}
-              onChangeText={(value) => app.setBookSummary(selected.book!.id, value)}
-              accessibilityLabel="编辑书本简介"
+          {activeTab === "related" ? (
+            <RelatedPanel
+              colors={colors}
+              material={selected.material}
+              materials={selected.materials}
+              onSelectMaterial={app.selectMaterial}
+              setMaterialContent={app.setMaterialContent}
+              styles={styles}
             />
+          ) : null}
 
-            <View style={styles.statusRow}>
-              <Text style={styles.statusLabel}>状态</Text>
-              <HorizontalList>
-                <Pill title="草稿" active={selected.book.status === "paused"} onPress={() => app.setBookStatus(selected.book!.id, "paused")} />
-                <Pill title="写作中" active={selected.book.status === "drafting"} onPress={() => app.setBookStatus(selected.book!.id, "drafting")} />
-                <Pill title="已完结" active={selected.book.status === "finished"} onPress={() => app.setBookStatus(selected.book!.id, "finished")} />
-              </HorizontalList>
-            </View>
-          </Section>
-
-          <Section title="文件夹">
-            <CardButton
-              title="正文"
-              body={`${selected.volumes.length} 卷 · ${selected.chapters.length} 章`}
-              onPress={() => setView("chapters")}
-              icon={<Ionicons name="folder-open-outline" size={26} color={colors.accent} />}
+          {activeTab === "manage" ? (
+            <ManagePanel
+              book={selected.book}
+              colors={colors}
+              onDeleteBook={() => setDeletingBookId(selected.book!.id)}
+              setBookStatus={app.setBookStatus}
+              setBookSummary={app.setBookSummary}
+              setBookTitle={app.setBookTitle}
+              styles={styles}
             />
-            <CardButton
-              title="资料"
-              body="世界观、人物关系、章节摘要"
-              onPress={() => setView("materials")}
-              icon={<Ionicons name="folder-outline" size={26} color={colors.accent} />}
-            />
-          </Section>
-
-          <Section title="危险操作">
-            <Button
-              title="删除整本书"
-              variant="danger"
-              onPress={() => setDeletingBookId(selected.book!.id)}
-            />
-          </Section>
-        </>
-      ) : null}
-
-      {view === "chapters" && selected.book ? (
-        <>
-          <Section title="添加新卷">
-            <Row>
-              <Field
-                label="卷标题"
-                value={newVolumeTitle}
-                onChangeText={setNewVolumeTitle}
-                placeholder={`第 ${selected.volumes.length + 1} 卷`}
-                accessibilityLabel="卷标题"
-                style={styles.inlineField}
-              />
-              <Button title="添加卷" onPress={createNewVolume} variant="secondary" disabled={!newVolumeTitle.trim()} />
-            </Row>
-          </Section>
-
-          {selected.volumes.map((volume) => {
-            const volumeChapters = selected.chapters.filter((ch) => ch.volumeId === volume.id);
-            const isExpanded = expandedVolumes.has(volume.id);
-            return (
-              <Section key={volume.id} title={volume.title}>
-                <View style={styles.volumeHeader}>
-                  <Pressable onPress={() => toggleVolume(volume.id)} style={styles.volumeToggle}>
-                    <Ionicons name={isExpanded ? "chevron-down" : "chevron-forward"} size={18} color={colors.text} />
-                    <Text style={styles.volumeToggleText}>
-                      {volumeChapters.length} 章
-                    </Text>
-                  </Pressable>
-                  <Pressable onPress={() => setDeletingVolumeId(volume.id)} style={styles.volumeDeleteBtn}>
-                    <Ionicons name="trash-outline" size={18} color={colors.danger} />
-                  </Pressable>
-                </View>
-
-                {isExpanded ? (
-                  <View style={styles.list}>
-                    {volumeChapters.map((chapter) => (
-                      <FileRow
-                        key={chapter.id}
-                        title={chapter.title}
-                        subtitle={`${chapter.content.length} 字`}
-                        active={chapter.id === selected.chapter?.id}
-                        onPress={() => app.selectChapter(chapter.id)}
-                        icon={<Ionicons name="document-text-outline" size={22} color={colors.accent} />}
-                      />
-                    ))}
-                    {volumeChapters.length === 0 ? (
-                      <Text style={styles.emptyHint}>暂无章节</Text>
-                    ) : null}
-                  </View>
-                ) : null}
-              </Section>
-            );
-          })}
-
-          <Section title="添加章节">
-            <View style={styles.pickerRow}>
-              <Text style={styles.pickerLabel}>目标卷：</Text>
-              {selected.volumes.map((vol) => (
-                <Pressable
-                  key={vol.id}
-                  onPress={() => setTargetVolumeId(vol.id)}
-                  style={[
-                    styles.pickerChip,
-                    targetVolumeId === vol.id && styles.pickerChipActive,
-                    { borderColor: targetVolumeId === vol.id ? colors.primary : colors.border }
-                  ]}
-                >
-                  <Text style={[styles.pickerChipText, targetVolumeId === vol.id && { color: colors.primary }]}>
-                    {vol.title}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <Row>
-              <Field
-                label="章节标题"
-                value={newChapterTitle}
-                onChangeText={setNewChapterTitle}
-                placeholder={`第 ${selected.chapters.length + 1} 章`}
-                accessibilityLabel="章节标题"
-                style={styles.inlineField}
-              />
-              <Button title="添加章节" onPress={createNewChapter} variant="secondary" disabled={!newChapterTitle.trim() || !targetVolumeId} />
-            </Row>
-          </Section>
-
-          {selected.chapter ? (
-            <Section title="编辑章节">
-              <Field
-                label="章节标题"
-                value={selected.chapter.title}
-                onChangeText={(value) => app.setChapterTitle(selected.chapter!.id, value)}
-                accessibilityLabel="编辑章节标题"
-              />
-              <Field
-                label="正文"
-                multiline
-                value={selected.chapter.content}
-                onChangeText={(value) => app.setChapterContent(selected.chapter!.id, value)}
-                onSelectionChange={(event) => app.setChapterSelection(selected.chapter!.id, event.nativeEvent.selection)}
-                placeholder="从这里编辑正文。选中文本后，可在 AI 对话里替换或续写。"
-                accessibilityLabel="章节正文"
-                style={styles.editor}
-              />
-            </Section>
           ) : null}
         </>
       ) : null}
 
-      {view === "materials" && selected.book ? (
-        <>
-          <Section title="资料文件夹">
-            <View style={styles.list}>
-              {selected.materials.map((material) => (
-                <FileRow
-                  key={material.id}
-                  title={material.title}
-                  subtitle={material.content ? `${material.content.length} 字` : "暂无内容"}
-                  active={material.id === selected.material?.id}
-                  onPress={() => app.selectMaterial(material.id)}
-                  icon={<Ionicons name="reader-outline" size={22} color={colors.accent} />}
-                />
-              ))}
-            </View>
-          </Section>
-
-          {selected.material ? (
-            <Section title="编辑资料">
-              <Field
-                label={selected.material.title}
-                multiline
-                value={selected.material.content}
-                onChangeText={(value) => app.setMaterialContent(selected.material!.id, value)}
-                placeholder="记录设定、关系或章节摘要。"
-                accessibilityLabel={selected.material.title}
-                style={styles.editor}
-              />
-            </Section>
-          ) : null}
-        </>
-      ) : null}
+      <CreateDialog
+        colors={colors}
+        createDialog={createDialog}
+        newChapterTitle={newChapterTitle}
+        newVolumeTitle={newVolumeTitle}
+        onCancel={() => setCreateDialog(null)}
+        onConfirmChapter={createNewChapter}
+        onConfirmVolume={createNewVolume}
+        selectedVolumes={selected.volumes}
+        setNewChapterTitle={setNewChapterTitle}
+        setNewVolumeTitle={setNewVolumeTitle}
+        setTargetVolumeId={setTargetVolumeId}
+        styles={styles}
+        targetVolumeId={targetVolumeId}
+      />
 
       <ConfirmDialog
         visible={!!deletingBookId}
         title="删除书本"
-        message={`确定要删除《${deletingBook?.title ?? ""}》吗？所有章节和资料将一并删除，此操作不可撤销。`}
+        message={`确定要删除《${deletingBook?.title ?? ""}》吗？所有章节和资料会一起删除，此操作不可撤销。`}
         confirmText="删除"
         cancelText="取消"
         onConfirm={handleDeleteBook}
@@ -349,14 +253,422 @@ export default function NovelsScreen() {
 
       <ConfirmDialog
         visible={!!deletingVolumeId}
-        title="删除卷"
-        message={`确定要删除《${deletingVolume?.title ?? ""}》吗？该卷下所有章节将一并删除，此操作不可撤销。`}
+        title="删除分卷"
+        message={`确定要删除《${deletingVolume?.title ?? ""}》吗？该分卷下所有章节会一起删除，此操作不可撤销。`}
         confirmText="删除"
         cancelText="取消"
         onConfirm={handleDeleteVolume}
         onCancel={() => setDeletingVolumeId(null)}
       />
     </Screen>
+  );
+}
+
+function BookDetailTopBar({ book, onBack, onMore }: { book: Book; onBack: () => void; onMore: () => void }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  return (
+    <View style={styles.referenceTopBar}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="返回书架"
+        onPress={onBack}
+        style={styles.referenceIconButton}
+      >
+        <Ionicons name="chevron-back" size={30} color="#FFFFFF" />
+      </Pressable>
+      <Text numberOfLines={1} style={styles.referenceTopTitle}>{book.title}</Text>
+      <View style={styles.referenceTopActions}>
+        <Ionicons name="sync-outline" size={27} color="#FFFFFF" />
+        <Pressable accessibilityRole="button" accessibilityLabel="更多管理" onPress={onMore} style={styles.moreButton}>
+          <Ionicons name="ellipsis-vertical" size={24} color="#FFFFFF" />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function BookHero({ book, chapters, volumes }: { book: Book; chapters: ChapterFile[]; volumes: Volume[] }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  return (
+    <View style={styles.bookHero}>
+      <DefaultCover title={book.title} />
+      <View style={styles.heroMeta}>
+        <InfoLine label="作者" value="未知" />
+        <InfoLine label="标签" value={formatStatus(book.status)} />
+        <InfoLine label="分卷" value={`${volumes.length}卷`} />
+        <InfoLine label="章节" value={`${chapters.length}章`} />
+        <InfoLine label="字数" value={`${countWords(chapters)}字`} />
+      </View>
+    </View>
+  );
+}
+
+function InfoLine({ label, value }: { label: string; value: string }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  return (
+    <View style={styles.infoLine}>
+      <Text style={styles.infoLabel}>{label}：</Text>
+      <Text numberOfLines={1} style={styles.infoValue}>{value}</Text>
+    </View>
+  );
+}
+
+function BookTabs({ activeTab, onChange }: { activeTab: BookTab; onChange: (tab: BookTab) => void }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const tabs: Array<{ key: BookTab; label: string; icon?: string }> = [
+    { key: "catalog", label: "目录" },
+    { key: "related", label: "相关" },
+    { key: "manage", label: "管理", icon: "list-outline" }
+  ];
+
+  return (
+    <View style={styles.tabsBar}>
+      {tabs.map((tab) => {
+        const active = activeTab === tab.key;
+        return (
+          <Pressable key={tab.key} accessibilityRole="button" onPress={() => onChange(tab.key)} style={styles.tabItem}>
+            {tab.icon ? (
+              <Ionicons name={tab.icon as keyof typeof Ionicons.glyphMap} size={25} color={active ? colors.success : colors.muted} />
+            ) : (
+              <Text style={[styles.tabText, active ? styles.tabTextActive : null]}>{tab.label}</Text>
+            )}
+            <View style={[styles.tabUnderline, active ? styles.tabUnderlineActive : null]} />
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function CatalogPanel({
+  chapters,
+  colors,
+  expandedVolumes,
+  onDeleteVolume,
+  onSelectChapter,
+  onToggleVolume,
+  selectedChapter,
+  setChapterContent,
+  setChapterSelection,
+  setChapterTitle,
+  styles,
+  volumes
+}: {
+  chapters: ChapterFile[];
+  colors: ThemeColors;
+  deletingVolumeId: string | null;
+  expandedVolumes: Set<string>;
+  onDeleteVolume: (volumeId: string) => void;
+  onSelectChapter: (chapterId: string) => void;
+  onToggleVolume: (volumeId: string) => void;
+  selectedChapter?: ChapterFile;
+  setChapterContent: (chapterId: string, content: string) => Promise<void>;
+  setChapterSelection: (chapterId: string, range: { start: number; end: number }) => void;
+  setChapterTitle: (chapterId: string, title: string) => Promise<void>;
+  styles: ReturnType<typeof createStyles>;
+  volumes: Volume[];
+}) {
+  return (
+    <View style={styles.flatPanel}>
+      {volumes.map((volume) => {
+        const volumeChapters = chapters.filter((chapter) => chapter.volumeId === volume.id);
+        const isExpanded = expandedVolumes.has(volume.id) || volumeChapters.some((chapter) => chapter.id === selectedChapter?.id);
+        return (
+          <View key={volume.id}>
+            <View style={styles.volumeRow}>
+              <Pressable accessibilityRole="button" onPress={() => onToggleVolume(volume.id)} style={styles.volumeToggleButton}>
+                <View style={styles.rowTitleGroup}>
+                  <Ionicons name={isExpanded ? "caret-down" : "caret-forward"} size={18} color={colors.muted} />
+                  <Text numberOfLines={1} style={styles.volumeTitle}>{volume.title}</Text>
+                </View>
+              </Pressable>
+              <View style={styles.rowTrailingGroup}>
+                <Text style={styles.rowTrailing}>{volumeChapters.length}章</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel={`删除${volume.title}`} onPress={() => onDeleteVolume(volume.id)} style={styles.rowIconButton}>
+                  <Ionicons name="trash-outline" size={18} color={colors.muted} />
+                </Pressable>
+              </View>
+            </View>
+
+            {isExpanded ? volumeChapters.map((chapter) => (
+              <Pressable
+                key={chapter.id}
+                accessibilityRole="button"
+                accessibilityState={{ selected: chapter.id === selectedChapter?.id }}
+                onPress={() => onSelectChapter(chapter.id)}
+                style={[styles.chapterRow, chapter.id === selectedChapter?.id ? styles.chapterRowActive : null]}
+              >
+                <Text numberOfLines={1} style={styles.chapterTitle}>{chapter.title}</Text>
+                <Text style={styles.rowTrailing}>{chapter.content.length}字</Text>
+              </Pressable>
+            )) : null}
+          </View>
+        );
+      })}
+
+      {chapters.length === 0 ? <Text style={styles.emptyHint}>暂无内容，点击右下角加号新建。</Text> : null}
+
+      {selectedChapter ? (
+        <View style={styles.editorBlock}>
+          <Field
+            label="章节名"
+            value={selectedChapter.title}
+            onChangeText={(value) => setChapterTitle(selectedChapter.id, value)}
+            accessibilityLabel="编辑章节名"
+          />
+          <Field
+            label="正文"
+            multiline
+            value={selectedChapter.content}
+            onChangeText={(value) => setChapterContent(selectedChapter.id, value)}
+            onSelectionChange={(event) => setChapterSelection(selectedChapter.id, event.nativeEvent.selection)}
+            placeholder="从这里编辑正文。选中文字后，可在 AI 对话里替换或续写。"
+            accessibilityLabel="章节正文"
+            style={styles.editor}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function RelatedPanel({
+  colors,
+  material,
+  materials,
+  onSelectMaterial,
+  setMaterialContent,
+  styles
+}: {
+  colors: ThemeColors;
+  material?: MaterialFile;
+  materials: MaterialFile[];
+  onSelectMaterial: (materialId: string) => void;
+  setMaterialContent: (materialId: string, content: string) => Promise<void>;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <View style={styles.flatPanel}>
+      {materials.map((item, index) => (
+        <Pressable
+          key={item.id}
+          accessibilityRole="button"
+          accessibilityState={{ selected: item.id === material?.id }}
+          onPress={() => onSelectMaterial(item.id)}
+          style={[styles.materialRow, item.id === material?.id ? styles.chapterRowActive : null]}
+        >
+          <Text numberOfLines={1} style={styles.materialTitle}>{materialTitle(item, index)}</Text>
+          <Text style={styles.rowTrailing}>{item.content.length}字</Text>
+        </Pressable>
+      ))}
+
+      {material ? (
+        <View style={styles.editorBlock}>
+          <Field
+            label={materialTitle(material, materials.findIndex((item) => item.id === material.id))}
+            multiline
+            value={material.content}
+            onChangeText={(value) => setMaterialContent(material.id, value)}
+            placeholder="记录设定、大纲、角色或灵感。"
+            accessibilityLabel={material.title}
+            style={styles.editor}
+          />
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <Ionicons name="reader-outline" size={30} color={colors.accent} />
+          <Text style={styles.emptyHint}>暂无相关资料。</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function ManagePanel({
+  book,
+  colors,
+  onDeleteBook,
+  setBookStatus,
+  setBookSummary,
+  setBookTitle,
+  styles
+}: {
+  book: Book;
+  colors: ThemeColors;
+  onDeleteBook: () => void;
+  setBookStatus: (bookId: string, status: Book["status"]) => Promise<void>;
+  setBookSummary: (bookId: string, summary: string) => Promise<void>;
+  setBookTitle: (bookId: string, title: string) => Promise<void>;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <View style={styles.managePanel}>
+      <Field
+        label="书名"
+        value={book.title}
+        onChangeText={(value) => setBookTitle(book.id, value)}
+        accessibilityLabel="编辑书名"
+      />
+      <Field
+        label="简介"
+        multiline
+        value={book.summary}
+        onChangeText={(value) => setBookSummary(book.id, value)}
+        accessibilityLabel="编辑书本简介"
+      />
+      <View style={styles.statusRow}>
+        <Text style={styles.statusLabel}>状态</Text>
+        <HorizontalList>
+          <Pill title="草稿" active={book.status === "paused"} onPress={() => setBookStatus(book.id, "paused")} />
+          <Pill title="写作中" active={book.status === "drafting"} onPress={() => setBookStatus(book.id, "drafting")} />
+          <Pill title="已完结" active={book.status === "finished"} onPress={() => setBookStatus(book.id, "finished")} />
+        </HorizontalList>
+      </View>
+      <Button
+        title="删除整本书"
+        variant="danger"
+        onPress={onDeleteBook}
+      />
+      <Text style={styles.manageHint}>删除后所有章节和资料会一起移除。</Text>
+      <Ionicons name="shield-checkmark-outline" size={18} color={colors.muted} />
+    </View>
+  );
+}
+
+function CreateFloatingAction({
+  isOpen,
+  onAction,
+  onToggle
+}: {
+  isOpen: boolean;
+  onAction: (action: CreateActionKey) => void;
+  onToggle: () => void;
+}) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  return (
+    <View style={styles.fabWrap}>
+      {getCreateActionMenuItems(isOpen).map((item) => (
+        <Pressable
+          key={item.key}
+          accessibilityRole="button"
+          accessibilityLabel={item.label}
+          onPress={() => onAction(item.key)}
+          style={({ pressed }) => [styles.fabActionRow, pressed ? styles.pressed : null]}
+        >
+          <Text style={styles.fabActionLabel}>{item.label}</Text>
+          <View style={styles.fabMini}>
+            <Ionicons name={item.icon} size={25} color={colors.success} />
+          </View>
+        </Pressable>
+      ))}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={isOpen ? "收起新建菜单" : "展开新建菜单"}
+        onPress={onToggle}
+        style={({ pressed }) => [styles.fabMain, pressed ? styles.pressed : null]}
+      >
+        <Ionicons name={isOpen ? "close" : "add"} size={38} color="#FFFFFF" />
+      </Pressable>
+    </View>
+  );
+}
+
+function CreateDialog({
+  colors,
+  createDialog,
+  newChapterTitle,
+  newVolumeTitle,
+  onCancel,
+  onConfirmChapter,
+  onConfirmVolume,
+  selectedVolumes,
+  setNewChapterTitle,
+  setNewVolumeTitle,
+  setTargetVolumeId,
+  styles,
+  targetVolumeId
+}: {
+  colors: ThemeColors;
+  createDialog: CreateDialogType;
+  newChapterTitle: string;
+  newVolumeTitle: string;
+  onCancel: () => void;
+  onConfirmChapter: () => void;
+  onConfirmVolume: () => void;
+  selectedVolumes: Volume[];
+  setNewChapterTitle: (value: string) => void;
+  setNewVolumeTitle: (value: string) => void;
+  setTargetVolumeId: (value: string) => void;
+  styles: ReturnType<typeof createStyles>;
+  targetVolumeId: string;
+}) {
+  const visible = createDialog !== null;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.dialogScrim}>
+        <View style={styles.createDialog}>
+          <Text style={styles.createDialogTitle}>{createDialog === "chapter" ? "新建章节" : "新建分卷"}</Text>
+          {createDialog === "chapter" ? (
+            <>
+              <View style={styles.dialogFieldRow}>
+                <Text style={styles.dialogFieldLabel}>选择分卷</Text>
+                <View style={styles.dialogChipRow}>
+                  {selectedVolumes.map((volume) => (
+                    <Pressable
+                      key={volume.id}
+                      accessibilityRole="button"
+                      onPress={() => setTargetVolumeId(volume.id)}
+                      style={[styles.dialogChip, targetVolumeId === volume.id ? styles.dialogChipActive : null]}
+                    >
+                      <Text style={[styles.dialogChipText, targetVolumeId === volume.id ? { color: colors.success } : null]}>{volume.title}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+              <View style={styles.dialogFieldRow}>
+                <Text style={styles.dialogFieldLabel}>新章节名</Text>
+                <TextInput
+                  accessibilityLabel="新章节名"
+                  value={newChapterTitle}
+                  onChangeText={setNewChapterTitle}
+                  placeholder="第1章"
+                  placeholderTextColor={colors.muted}
+                  style={styles.dialogInput}
+                />
+              </View>
+            </>
+          ) : (
+            <View style={styles.dialogSingleInput}>
+              <TextInput
+                accessibilityLabel="新分卷名"
+                value={newVolumeTitle}
+                onChangeText={setNewVolumeTitle}
+                placeholder="第1卷"
+                placeholderTextColor={colors.muted}
+                style={styles.dialogInputLarge}
+              />
+            </View>
+          )}
+          <View style={styles.createDialogActions}>
+            <Pressable accessibilityRole="button" onPress={onCancel} style={styles.createDialogButton}>
+              <Text style={styles.createDialogCancelText}>取消</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" onPress={createDialog === "chapter" ? onConfirmChapter : onConfirmVolume} style={styles.createDialogButton}>
+              <Text style={styles.createDialogConfirmText}>确定</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -382,7 +694,7 @@ function BookCover({
       accessibilityRole="button"
       accessibilityLabel={`打开书本 ${book.title}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.coverCard, active && styles.coverCardActive, pressed && styles.coverCardPressed]}
+      style={({ pressed }) => [styles.coverCard, active && styles.coverCardActive, pressed && styles.pressed]}
     >
       <View style={[styles.coverBlock, { backgroundColor: coverColor }]}>
         <View style={styles.coverSpine} />
@@ -394,9 +706,30 @@ function BookCover({
         {book.title}
       </Text>
       <Text style={styles.bookMeta}>
-        {volumes.length} 卷 · {chapters.length} 章 · {countWords(chapters)} 字
+        {volumes.length}卷 · {chapters.length}章 · {countWords(chapters)}字
       </Text>
     </Pressable>
+  );
+}
+
+function DefaultCover({ title }: { title: string }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  return (
+    <View style={styles.defaultCover}>
+      <View style={styles.ribbon}>
+        <Text style={styles.ribbonText}>新作品</Text>
+      </View>
+      <View style={styles.coverNamePlate}>
+        <Text style={styles.coverNameText}>默认封面</Text>
+      </View>
+      <View style={styles.mountainRow}>
+        <View style={[styles.mountain, { borderBottomColor: colors.accentSoft }]} />
+        <View style={[styles.mountainSmall, { borderBottomColor: colors.accent }]} />
+      </View>
+      <Text numberOfLines={1} style={styles.hiddenCoverTitle}>{title}</Text>
+    </View>
   );
 }
 
@@ -407,7 +740,15 @@ function countWords(chapters: ChapterFile[]): number {
 function formatStatus(status: Book["status"]): string {
   if (status === "drafting") return "写作中";
   if (status === "finished") return "已完结";
-  return "草稿";
+  return "新作品";
+}
+
+function materialTitle(material: MaterialFile, index: number): string {
+  if (material.kind === "worldbuilding") return "作品设定";
+  if (material.kind === "plotOutline") return "作品大纲";
+  if (material.kind === "characters") return "角色设定";
+  if (material.kind === "chapterSummary") return "灵感记录";
+  return material.title || `资料${index + 1}`;
 }
 
 function isErrorNotice(message: string): boolean {
@@ -425,35 +766,25 @@ function createStyles(colors: ThemeColors) {
     },
     coverCard: {
       width: BOOK_COVER_WIDTH,
-      minHeight: 238,
-      borderRadius: 18,
-      borderColor: colors.border,
-      borderWidth: 1,
+      minHeight: 232,
+      borderRadius: 12,
       backgroundColor: colors.surface,
-      padding: spacing.sm,
-      shadowColor: colors.shadow,
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.08,
-      shadowRadius: 16,
-      elevation: 2
+      padding: spacing.sm
     },
     coverCardActive: {
-      borderColor: colors.primary,
+      borderColor: colors.success,
       borderWidth: 2
-    },
-    coverCardPressed: {
-      opacity: 0.78
     },
     coverBlock: {
       height: 178,
-      borderRadius: 14,
+      borderRadius: 8,
       justifyContent: "flex-end",
       overflow: "hidden",
-      padding: spacing.xs
+      padding: spacing.sm
     },
     coverSpine: {
       bottom: 0,
-      left: 7,
+      left: 8,
       position: "absolute",
       top: 0,
       width: 1,
@@ -474,70 +805,283 @@ function createStyles(colors: ThemeColors) {
     bookMeta: {
       color: colors.muted,
       fontSize: 12,
-      fontWeight: "700",
+      fontWeight: "600",
       marginTop: 2
     },
-    list: {
-      gap: spacing.sm
+    referenceTopBar: {
+      alignItems: "center",
+      backgroundColor: colors.success,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginHorizontal: -spacing.lg,
+      marginTop: -spacing.lg,
+      minHeight: 82,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md
     },
-    metaBox: {
-      gap: spacing.sm,
-      borderRadius: 18,
+    referenceTopTitle: {
+      color: "#FFFFFF",
+      flex: 1,
+      fontSize: 26,
+      fontWeight: "500",
+      textAlign: "center"
+    },
+    referenceTopActions: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.md,
+      justifyContent: "flex-end",
+      minWidth: 88
+    },
+    referenceIconButton: {
+      alignItems: "center",
+      height: 44,
+      justifyContent: "center",
+      minWidth: 88
+    },
+    moreButton: {
+      alignItems: "center",
+      height: 44,
+      justifyContent: "center",
+      width: 44
+    },
+    bookHero: {
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      flexDirection: "row",
+      gap: spacing.xl,
+      marginHorizontal: -spacing.lg,
+      marginTop: -spacing.lg,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.xl
+    },
+    defaultCover: {
+      backgroundColor: "#F7F6F0",
+      borderRadius: 7,
+      height: 142,
+      overflow: "hidden",
+      position: "relative",
+      width: 104
+    },
+    ribbon: {
+      backgroundColor: colors.success,
+      left: -34,
+      paddingVertical: 5,
+      position: "absolute",
+      top: 18,
+      transform: [{ rotate: "-45deg" }],
+      width: 122,
+      zIndex: 2
+    },
+    ribbonText: {
+      color: "#FFFFFF",
+      fontSize: 15,
+      fontWeight: "700",
+      textAlign: "center"
+    },
+    coverNamePlate: {
+      alignSelf: "center",
       borderColor: colors.border,
       borderWidth: 1,
-      backgroundColor: colors.surface,
-      padding: spacing.lg
+      marginTop: 22,
+      paddingHorizontal: 9,
+      paddingVertical: 6
     },
-    metaHeader: {
+    coverNameText: {
+      color: colors.muted,
+      fontSize: 18,
+      lineHeight: 26,
+      textAlign: "center",
+      writingDirection: "ltr"
+    },
+    mountainRow: {
+      alignItems: "flex-end",
+      bottom: 12,
+      flexDirection: "row",
+      gap: -14,
+      left: 10,
+      position: "absolute"
+    },
+    mountain: {
+      borderBottomWidth: 34,
+      borderLeftColor: "transparent",
+      borderLeftWidth: 36,
+      borderRightColor: "transparent",
+      borderRightWidth: 36,
+      height: 0,
+      opacity: 0.75,
+      width: 0
+    },
+    mountainSmall: {
+      borderBottomWidth: 24,
+      borderLeftColor: "transparent",
+      borderLeftWidth: 26,
+      borderRightColor: "transparent",
+      borderRightWidth: 26,
+      height: 0,
+      opacity: 0.45,
+      width: 0
+    },
+    hiddenCoverTitle: {
+      bottom: 4,
+      color: "transparent",
+      fontSize: 1,
+      position: "absolute"
+    },
+    heroMeta: {
+      flex: 1,
+      gap: spacing.sm
+    },
+    infoLine: {
+      alignItems: "center",
+      flexDirection: "row"
+    },
+    infoLabel: {
+      color: colors.text,
+      fontSize: 22,
+      lineHeight: 29
+    },
+    infoValue: {
+      color: colors.text,
+      flex: 1,
+      fontSize: 22,
+      lineHeight: 29
+    },
+    tabsBar: {
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      borderBottomColor: colors.border,
+      borderBottomWidth: 1,
+      flexDirection: "row",
+      justifyContent: "space-around",
+      marginHorizontal: -spacing.lg,
+      marginTop: -spacing.lg,
+      minHeight: 82
+    },
+    tabItem: {
+      alignItems: "center",
+      flex: 1,
+      gap: spacing.sm,
+      minHeight: 68,
+      justifyContent: "center"
+    },
+    tabText: {
+      color: colors.muted,
+      fontSize: 25,
+      fontWeight: "500"
+    },
+    tabTextActive: {
+      color: colors.success
+    },
+    tabUnderline: {
+      backgroundColor: "transparent",
+      borderRadius: 2,
+      height: 4,
+      width: 48
+    },
+    tabUnderlineActive: {
+      backgroundColor: colors.success
+    },
+    flatPanel: {
+      backgroundColor: colors.surface,
+      marginHorizontal: -spacing.lg,
+      marginTop: -spacing.lg,
+      paddingBottom: 132
+    },
+    volumeRow: {
+      alignItems: "center",
+      borderBottomColor: colors.border,
+      borderBottomWidth: 1,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      minHeight: 70,
+      paddingHorizontal: spacing.lg
+    },
+    volumeToggleButton: {
+      alignItems: "center",
+      flex: 1,
+      flexDirection: "row",
+      minHeight: 70
+    },
+    rowTitleGroup: {
+      alignItems: "center",
+      flex: 1,
       flexDirection: "row",
       gap: spacing.md
     },
-    metaCover: {
-      width: 56,
-      height: 72,
-      borderRadius: 10,
-      justifyContent: "flex-end",
-      overflow: "hidden",
-      padding: 4
-    },
-    metaCoverTitle: {
-      color: "#FFFFFF",
-      fontSize: 8,
-      fontWeight: "800",
-      lineHeight: 10
-    },
-    metaInfo: {
-      flex: 1,
-      gap: 2,
-      justifyContent: "center"
-    },
-    metaTitle: {
-      color: colors.text,
-      fontSize: 20,
-      fontWeight: "800"
-    },
-    metaText: {
+    volumeTitle: {
       color: colors.muted,
-      fontSize: 14
+      flex: 1,
+      fontSize: 27,
+      fontWeight: "500"
     },
-    volumeHeader: {
+    rowTrailingGroup: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.sm
+    },
+    rowTrailing: {
+      color: colors.muted,
+      fontSize: 22,
+      minWidth: 54,
+      textAlign: "right"
+    },
+    rowIconButton: {
+      alignItems: "center",
+      height: 44,
+      justifyContent: "center",
+      width: 44
+    },
+    chapterRow: {
+      alignItems: "center",
+      borderBottomColor: colors.border,
+      borderBottomWidth: 1,
       flexDirection: "row",
       justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: spacing.xs
+      minHeight: 78,
+      paddingLeft: spacing.xxxl,
+      paddingRight: spacing.lg
     },
-    volumeToggle: {
+    chapterRowActive: {
+      backgroundColor: colors.surfaceAlt
+    },
+    chapterTitle: {
+      color: colors.text,
+      flex: 1,
+      fontSize: 26,
+      fontWeight: "500"
+    },
+    materialRow: {
+      alignItems: "center",
+      borderBottomColor: colors.border,
+      borderBottomWidth: 1,
       flexDirection: "row",
-      alignItems: "center",
-      gap: spacing.xs
+      justifyContent: "space-between",
+      minHeight: 86,
+      paddingHorizontal: spacing.xl
     },
-    volumeToggleText: {
+    materialTitle: {
+      color: colors.text,
+      flex: 1,
+      fontSize: 27,
+      fontWeight: "500"
+    },
+    editorBlock: {
+      gap: spacing.md,
+      padding: spacing.lg
+    },
+    managePanel: {
+      backgroundColor: colors.surface,
+      gap: spacing.lg,
+      marginHorizontal: -spacing.lg,
+      marginTop: -spacing.lg,
+      padding: spacing.lg,
+      paddingBottom: 132
+    },
+    manageHint: {
       color: colors.muted,
       fontSize: 13,
-      fontWeight: "600"
-    },
-    volumeDeleteBtn: {
-      padding: spacing.xs
+      lineHeight: 18
     },
     statusRow: {
       gap: spacing.xs
@@ -547,45 +1091,167 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontWeight: "700"
     },
-    pickerRow: {
+    editor: {
+      minHeight: 260
+    },
+    fabWrap: {
+      alignItems: "flex-end",
+      alignSelf: "center",
+      gap: spacing.lg,
+      maxWidth: 720,
+      paddingRight: spacing.xl,
+      width: "100%"
+    },
+    fabActionRow: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.lg
+    },
+    fabActionLabel: {
+      color: colors.text,
+      fontSize: 25,
+      fontWeight: "500"
+    },
+    fabMini: {
+      alignItems: "center",
+      backgroundColor: colors.surface,
+      borderRadius: 28,
+      height: 56,
+      justifyContent: "center",
+      shadowColor: colors.shadow,
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.18,
+      shadowRadius: 16,
+      width: 56
+    },
+    fabMain: {
+      alignItems: "center",
+      backgroundColor: colors.success,
+      borderRadius: 42,
+      height: 84,
+      justifyContent: "center",
+      shadowColor: colors.shadow,
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: 0.22,
+      shadowRadius: 18,
+      width: 84
+    },
+    pressed: {
+      opacity: 0.72
+    },
+    dialogScrim: {
+      alignItems: "center",
+      backgroundColor: "rgba(0,0,0,0.46)",
+      flex: 1,
+      justifyContent: "center",
+      paddingHorizontal: spacing.xl
+    },
+    createDialog: {
+      backgroundColor: colors.surface,
+      borderRadius: 22,
+      maxWidth: 620,
+      overflow: "hidden",
+      width: "100%"
+    },
+    createDialogTitle: {
+      color: colors.text,
+      fontSize: 27,
+      fontWeight: "800",
+      paddingTop: spacing.xl,
+      textAlign: "center"
+    },
+    dialogFieldRow: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.lg,
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.xl
+    },
+    dialogFieldLabel: {
+      color: colors.text,
+      fontSize: 22,
+      minWidth: 94
+    },
+    dialogChipRow: {
+      flex: 1,
       flexDirection: "row",
       flexWrap: "wrap",
-      gap: spacing.xs,
-      marginBottom: spacing.sm
+      gap: spacing.sm
     },
-    pickerLabel: {
-      color: colors.text,
-      fontSize: 14,
-      fontWeight: "700",
-      paddingTop: 6
-    },
-    pickerChip: {
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 6,
+    dialogChip: {
+      borderColor: colors.border,
       borderRadius: 16,
       borderWidth: 1,
-      backgroundColor: colors.surface
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs
     },
-    pickerChipActive: {
-      backgroundColor: colors.background
+    dialogChipActive: {
+      borderColor: colors.success,
+      backgroundColor: colors.primarySoft
     },
-    pickerChipText: {
-      fontSize: 13,
-      fontWeight: "600",
-      color: colors.muted
+    dialogChipText: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: "600"
     },
-    editor: {
-      minHeight: 300
+    dialogInput: {
+      color: colors.text,
+      flex: 1,
+      fontSize: 22,
+      fontWeight: "700",
+      minHeight: 48
     },
-    inlineField: {
-      minWidth: 190
+    dialogSingleInput: {
+      alignItems: "center",
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.xxl
+    },
+    dialogInputLarge: {
+      color: colors.text,
+      fontSize: 28,
+      fontWeight: "700",
+      minHeight: 56,
+      textAlign: "center",
+      width: "100%"
+    },
+    createDialogActions: {
+      borderTopColor: colors.border,
+      borderTopWidth: 1,
+      flexDirection: "row",
+      marginTop: spacing.xl
+    },
+    createDialogButton: {
+      alignItems: "center",
+      flex: 1,
+      minHeight: 72,
+      justifyContent: "center"
+    },
+    createDialogCancelText: {
+      color: colors.muted,
+      fontSize: 23,
+      fontWeight: "700"
+    },
+    createDialogConfirmText: {
+      color: colors.text,
+      fontSize: 23,
+      fontWeight: "800"
+    },
+    emptyState: {
+      alignItems: "center",
+      gap: spacing.sm,
+      paddingVertical: spacing.xl
+    },
+    emptyTitle: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: "800"
     },
     emptyHint: {
       color: colors.muted,
-      fontSize: 14,
-      lineHeight: 20,
-      textAlign: "center",
-      paddingVertical: spacing.xl
+      fontSize: 16,
+      lineHeight: 22,
+      paddingVertical: spacing.lg,
+      textAlign: "center"
     }
   });
 }

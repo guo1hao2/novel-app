@@ -19,10 +19,12 @@ import { spacing, type ThemeColors } from "../theme";
 export function Screen({
   children,
   footer,
+  floatingAction,
   stickyHeader
 }: {
   children: ReactNode;
   footer?: ReactNode;
+  floatingAction?: ReactNode;
   stickyHeader?: ReactNode;
 }) {
   const { styles } = useUiStyles();
@@ -38,6 +40,7 @@ export function Screen({
         {children}
       </ScrollView>
       {footer ? <View style={styles.screenFooter}>{footer}</View> : null}
+      {floatingAction ? <View style={styles.floatingActionLayer} pointerEvents="box-none">{floatingAction}</View> : null}
     </SafeAreaView>
   );
 }
@@ -492,7 +495,15 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     safeArea: {
       flex: 1,
-      backgroundColor: colors.background
+      backgroundColor: colors.background,
+      position: "relative"
+    },
+    floatingActionLayer: {
+      bottom: spacing.xl,
+      left: 0,
+      position: "absolute",
+      right: 0,
+      zIndex: 20
     },
     stickyHeaderShell: {
       position: "absolute",
