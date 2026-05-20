@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
@@ -24,6 +25,7 @@ function bookColor(book: Book): string {
 
 export default function NovelsScreen() {
   const app = useApp();
+  const router = useRouter();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [newChapterTitle, setNewChapterTitle] = useState("");
@@ -186,15 +188,13 @@ export default function NovelsScreen() {
             <CatalogPanel
               chapters={selected.chapters}
               colors={colors}
-              deletingVolumeId={deletingVolumeId}
               expandedVolumes={expandedVolumes}
               onDeleteVolume={setDeletingVolumeId}
-              onSelectChapter={app.selectChapter}
+              onOpenChapter={(chapterId) => {
+                app.selectChapter(chapterId);
+                router.push({ pathname: "/chapter-editor", params: { chapterId } });
+              }}
               onToggleVolume={toggleVolume}
-              selectedChapter={selected.chapter}
-              setChapterContent={app.setChapterContent}
-              setChapterSelection={app.setChapterSelection}
-              setChapterTitle={app.setChapterTitle}
               styles={styles}
               volumes={selected.volumes}
             />
@@ -203,10 +203,11 @@ export default function NovelsScreen() {
           {activeTab === "related" ? (
             <RelatedPanel
               colors={colors}
-              material={selected.material}
               materials={selected.materials}
-              onSelectMaterial={app.selectMaterial}
-              setMaterialContent={app.setMaterialContent}
+              onOpenMaterial={(materialId) => {
+                app.selectMaterial(materialId);
+                router.push({ pathname: "/material-editor", params: { materialId } });
+              }}
               styles={styles}
             />
           ) : null}
@@ -351,26 +352,17 @@ function CatalogPanel({
   colors,
   expandedVolumes,
   onDeleteVolume,
-  onSelectChapter,
+  onOpenChapter,
   onToggleVolume,
-  selectedChapter,
-  setChapterContent,
-  setChapterSelection,
-  setChapterTitle,
   styles,
   volumes
 }: {
   chapters: ChapterFile[];
   colors: ThemeColors;
-  deletingVolumeId: string | null;
   expandedVolumes: Set<string>;
   onDeleteVolume: (volumeId: string) => void;
-  onSelectChapter: (chapterId: string) => void;
+  onOpenChapter: (chapterId: string) => void;
   onToggleVolume: (volumeId: string) => void;
-  selectedChapter?: ChapterFile;
-  setChapterContent: (chapterId: string, content: string) => Promise<void>;
-  setChapterSelection: (chapterId: string, range: { start: number; end: number }) => void;
-  setChapterTitle: (chapterId: string, title: string) => Promise<void>;
   styles: ReturnType<typeof createStyles>;
   volumes: Volume[];
 }) {
@@ -378,7 +370,7 @@ function CatalogPanel({
     <View style={styles.flatPanel}>
       {volumes.map((volume) => {
         const volumeChapters = chapters.filter((chapter) => chapter.volumeId === volume.id);
-        const isExpanded = expandedVolumes.has(volume.id) || volumeChapters.some((chapter) => chapter.id === selectedChapter?.id);
+        const isExpanded = expandedVolumes.has(volume.id);
         return (
           <View key={volume.id}>
             <View style={styles.volumeRow}>
@@ -400,9 +392,8 @@ function CatalogPanel({
               <Pressable
                 key={chapter.id}
                 accessibilityRole="button"
-                accessibilityState={{ selected: chapter.id === selectedChapter?.id }}
-                onPress={() => onSelectChapter(chapter.id)}
-                style={[styles.chapterRow, chapter.id === selectedChapter?.id ? styles.chapterRowActive : null]}
+                onPress={() => onOpenChapter(chapter.id)}
+                style={styles.chapterRow}
               >
                 <Text numberOfLines={1} style={styles.chapterTitle}>{chapter.title}</Text>
                 <Text style={styles.rowTrailing}>{chapter.content.length}字</Text>
@@ -413,74 +404,34 @@ function CatalogPanel({
       })}
 
       {chapters.length === 0 ? <Text style={styles.emptyHint}>暂无内容，点击右下角加号新建。</Text> : null}
-
-      {selectedChapter ? (
-        <View style={styles.editorBlock}>
-          <Field
-            label="章节名"
-            value={selectedChapter.title}
-            onChangeText={(value) => setChapterTitle(selectedChapter.id, value)}
-            accessibilityLabel="编辑章节名"
-          />
-          <Field
-            label="正文"
-            multiline
-            value={selectedChapter.content}
-            onChangeText={(value) => setChapterContent(selectedChapter.id, value)}
-            onSelectionChange={(event) => setChapterSelection(selectedChapter.id, event.nativeEvent.selection)}
-            placeholder="从这里编辑正文。选中文字后，可在 AI 对话里替换或续写。"
-            accessibilityLabel="章节正文"
-            style={styles.editor}
-          />
-        </View>
-      ) : null}
     </View>
   );
 }
 
 function RelatedPanel({
   colors,
-  material,
   materials,
-  onSelectMaterial,
-  setMaterialContent,
+  onOpenMaterial,
   styles
 }: {
   colors: ThemeColors;
-  material?: MaterialFile;
   materials: MaterialFile[];
-  onSelectMaterial: (materialId: string) => void;
-  setMaterialContent: (materialId: string, content: string) => Promise<void>;
+  onOpenMaterial: (materialId: string) => void;
   styles: ReturnType<typeof createStyles>;
 }) {
   return (
     <View style={styles.flatPanel}>
-      {materials.map((item, index) => (
+      {materials.length > 0 ? materials.map((item, index) => (
         <Pressable
           key={item.id}
           accessibilityRole="button"
-          accessibilityState={{ selected: item.id === material?.id }}
-          onPress={() => onSelectMaterial(item.id)}
-          style={[styles.materialRow, item.id === material?.id ? styles.chapterRowActive : null]}
+          onPress={() => onOpenMaterial(item.id)}
+          style={styles.materialRow}
         >
           <Text numberOfLines={1} style={styles.materialTitle}>{materialTitle(item, index)}</Text>
           <Text style={styles.rowTrailing}>{item.content.length}字</Text>
         </Pressable>
-      ))}
-
-      {material ? (
-        <View style={styles.editorBlock}>
-          <Field
-            label={materialTitle(material, materials.findIndex((item) => item.id === material.id))}
-            multiline
-            value={material.content}
-            onChangeText={(value) => setMaterialContent(material.id, value)}
-            placeholder="记录设定、大纲、角色或灵感。"
-            accessibilityLabel={material.title}
-            style={styles.editor}
-          />
-        </View>
-      ) : (
+      )) : (
         <View style={styles.emptyState}>
           <Ionicons name="reader-outline" size={30} color={colors.accent} />
           <Text style={styles.emptyHint}>暂无相关资料。</Text>
@@ -1066,10 +1017,6 @@ function createStyles(colors: ThemeColors) {
       fontSize: 27,
       fontWeight: "500"
     },
-    editorBlock: {
-      gap: spacing.md,
-      padding: spacing.lg
-    },
     managePanel: {
       backgroundColor: colors.surface,
       gap: spacing.lg,
@@ -1090,9 +1037,6 @@ function createStyles(colors: ThemeColors) {
       color: colors.text,
       fontSize: 14,
       fontWeight: "700"
-    },
-    editor: {
-      minHeight: 260
     },
     fabWrap: {
       alignItems: "flex-end",
