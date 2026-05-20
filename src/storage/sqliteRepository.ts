@@ -1,5 +1,5 @@
 import * as SQLite from "expo-sqlite";
-import type { ApiProvider, Book, ChatMessage, ChapterFile, MaterialField, MaterialFile, MaterialKind, SkillAction, SkillTemplate, Volume } from "../types";
+import type { ApiProvider, Book, ChatMessage, ChapterFile, Conversation, MaterialField, MaterialFile, MaterialKind, SkillAction, SkillTemplate, Volume } from "../types";
 import { createDefaultSkills, normalizeSkillAction, type LibraryState } from "../features/library/localLibrary";
 import { DEFAULT_PROVIDER } from "../features/settings/defaultProvider";
 import { normalizeMaxTokens } from "../features/settings/maxTokens";
@@ -82,6 +82,23 @@ type ProviderRow = {
   temperature: number;
   max_tokens: number;
   api_key_storage_key: string;
+};
+
+type ConversationRow = {
+  id: string;
+  book_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type MessageRow = {
+  id: string;
+  book_id: string;
+  conversation_id: string;
+  role: string;
+  content: string;
+  created_at: string;
 };
 
 type LegacyNovelRow = {
@@ -406,13 +423,87 @@ export async function appendChatMessage(message: ChatMessage): Promise<void> {
   await initializeDatabaseOnce();
   await enqueueWrite(async () => {
     const database = await getDatabase();
-    await database.runAsync("INSERT INTO chat_messages (id, book_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)", [
-      message.id,
-      message.bookId,
-      message.role,
-      message.content,
-      message.createdAt
-    ]);
+    await database.runAsync(
+      "INSERT INTO chat_messages (id, book_id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [message.id, message.bookId, message.conversationId, message.role, message.content, message.createdAt]
+    );
+  });
+  if (message.conversationId) {
+    await enqueueWrite(async () => {
+      const database = await getDatabase();
+      await database.runAsync(
+        "UPDATE conversations SET updated_at = ? WHERE id = ?",
+        [message.createdAt, message.conversationId]
+      );
+    });
+  }
+}
+
+export async function createConversation(id: string, bookId: string, title: string): Promise<Conversation> {
+  await initializeDatabaseOnce();
+  const now = new Date().toISOString();
+  const conversation: Conversation = { id, bookId, title, createdAt: now, updatedAt: now };
+  await enqueueWrite(async () => {
+    const database = await getDatabase();
+    await database.runAsync(
+      "INSERT INTO conversations (id, book_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      [id, bookId, title, now, now]
+    );
+  });
+  return conversation;
+}
+
+export async function loadConversations(bookId: string): Promise<Conversation[]> {
+  await initializeDatabaseOnce();
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<ConversationRow>(
+    "SELECT * FROM conversations WHERE book_id = ? ORDER BY updated_at DESC",
+    [bookId]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    bookId: row.book_id,
+    title: row.title,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await initializeDatabaseOnce();
+  await enqueueWrite(async () => {
+    const database = await getDatabase();
+    await database.runAsync("DELETE FROM chat_messages WHERE conversation_id = ?", [conversationId]);
+    await database.runAsync("DELETE FROM conversations WHERE id = ?", [conversationId]);
+  });
+}
+
+export async function loadConversationMessages(conversationId: string): Promise<ChatMessage[]> {
+  await initializeDatabaseOnce();
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<MessageRow>(
+    "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+    [conversationId]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    bookId: row.book_id,
+    conversationId: row.conversation_id,
+    role: row.role as "user" | "assistant" | "system",
+    content: row.content,
+    createdAt: row.created_at
+  }));
+}
+
+export async function updateConversationTitle(conversationId: string, title: string): Promise<void> {
+  await initializeDatabaseOnce();
+  const now = new Date().toISOString();
+  await enqueueWrite(async () => {
+    const database = await getDatabase();
+    await database.runAsync(
+      "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+      [title, now, conversationId]
+    );
   });
 }
 
@@ -589,9 +680,17 @@ async function repairCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> 
     `CREATE TABLE IF NOT EXISTS chat_messages (
       id TEXT PRIMARY KEY NOT NULL,
       book_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL,
       content TEXT NOT NULL,
       created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS api_providers (
       id TEXT PRIMARY KEY NOT NULL,
@@ -610,6 +709,8 @@ async function repairCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> 
     "CREATE INDEX IF NOT EXISTS idx_chapter_files_book_id ON chapter_files(book_id)",
     "CREATE INDEX IF NOT EXISTS idx_material_files_book_id ON material_files(book_id)",
     "CREATE INDEX IF NOT EXISTS idx_chat_messages_book_id ON chat_messages(book_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_conversations_book_id ON conversations(book_id)",
     "CREATE INDEX IF NOT EXISTS idx_chapter_files_sort ON chapter_files(book_id, sort_order)",
     "CREATE INDEX IF NOT EXISTS idx_volumes_book_id ON volumes(book_id)"
   ];
@@ -624,6 +725,7 @@ async function repairCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> 
     ["material_files", "fields TEXT NOT NULL DEFAULT '[]'"],
     ["material_files", "tags TEXT NOT NULL DEFAULT '[]'"],
     ["skills", "action TEXT NOT NULL DEFAULT 'appendText'"],
+    ["chat_messages", "conversation_id TEXT NOT NULL DEFAULT ''"],
     ["api_providers", "vendor TEXT NOT NULL DEFAULT 'deepseek'"],
     ["api_providers", "is_active INTEGER NOT NULL DEFAULT 0"]
   ];
@@ -646,6 +748,7 @@ async function assertCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> 
     "material_files",
     "skills",
     "chat_messages",
+    "conversations",
     "api_providers",
     "volumes",
     "schema_version"
