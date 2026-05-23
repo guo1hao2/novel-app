@@ -45,15 +45,7 @@ export function buildChatCompletionRequest(input: BuildChatCompletionRequestInpu
     messages: [
       {
         role: "system",
-        content: [
-          "你是一位资深中文长篇小说创作助手，擅长叙事结构、人物塑造和文学性表达。",
-          "核心原则：",
-          "1. 忠于已建立的世界观、人物性格和剧情事实，绝不擅自修改已有内容。",
-          "2. 保持当前作品的叙事视角（第一人称/第三人称）、时态和文风。",
-          "3. 输出高质量中文文学文本，注意节奏感、画面感和情绪张力。",
-          "4. 直接输出小说正文或创作内容，不要加前言说明、不要复述指令。",
-          "5. 如果用户没有指定字数，默认输出 800-1500 字。"
-        ].join("\n")
+        content: LONG_FORM_WRITING_SYSTEM_PROMPT
       },
       {
         role: "user",
@@ -83,3 +75,4 @@ export function buildChatCompletionRequest(input: BuildChatCompletionRequestInpu
     ]
   };
 }
+import { LONG_FORM_WRITING_SYSTEM_PROMPT } from "./prompts";

@@ -1,4 +1,5 @@
 import type { MaterialKind } from "../../types";
+import { MATERIAL_LIBRARY_FINALIZATION_SYSTEM_PROMPT } from "./prompts";
 import type { ChatCompletionMessage } from "./promptBuilder";
 
 export type StyleSuggestion = {
@@ -443,22 +444,19 @@ export function buildFinalizeBookMessages(input: OnboardingAnswers): ChatComplet
   return [
     {
       role: "system",
-      content: [
-        "你是中文长篇小说资料库整理助手。",
-        "你必须只输出合法 JSON，不要输出 markdown，不要输出解释。",
-        'json 结构：{"title":"","summary":"","worldbuilding":"","characters":"","plotOutline":"","chapterSummary":""}'
-      ].join("\n")
+      content: MATERIAL_LIBRARY_FINALIZATION_SYSTEM_PROMPT
     },
     {
       role: "user",
       content: [
         "请把下面的新书访谈答案整理成一本小说的基础资料。",
         "title 必须是书名；如果暂定书名为空，请根据内容生成一个简短中文书名。",
-        "summary 是书本简介，适合显示在书架。",
-        "worldbuilding 记录类型、风格、世界/时代、叙事气质。",
-        "characters 记录主角和重要关系苗头。",
-        "plotOutline 记录可持续扩展的章节大纲，至少包含第一章方向和后续 2-4 个情节点。",
-        "chapterSummary 记录核心冲突、第一章目标和开篇方向。",
+        "summary 是书本简介，适合显示在书架，控制在 80-160 字，突出类型、主角、核心冲突和钩子。",
+        "worldbuilding 按小标题组织，至少包含【类型与气质】【世界规则】【能力体系】【社会结构/势力】【限制与代价】。",
+        "characters 按小标题组织，至少包含【主角能力】【主角动机】【人物关系】【潜在对手/盟友】【说话和行动气质】。",
+        "plotOutline 按小标题组织，至少包含【第一卷主线】和 6-10 个后续情节点；每个情节点要能直接指导后续章节续写。",
+        "chapterSummary 按小标题组织，至少包含【核心冲突】【第一章目标】【开篇钩子】【已知伏笔】【续写落点】。",
+        "资料库字段要具体、可执行、可续写；不要只写概念标签或短句。",
         "输出必须是合法 JSON。",
         "",
         `类型：${input.genre}`,

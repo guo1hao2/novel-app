@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { ApiProvider, ChatMessage, ChapterFile, Conversation, MaterialFile, MaterialKind, SkillTemplate, Volume } from "../types";
+import type { ApiProvider, ChatMessage, ChapterFile, Conversation, MaterialFile, MaterialKind, SkillTemplate, TaskAssignment, Volume } from "../types";
 import {
   appendToChapter,
   createBook,
@@ -26,7 +26,7 @@ import {
   type LibraryState
 } from "../features/library/localLibrary";
 import { DEFAULT_PROVIDER } from "../features/settings/defaultProvider";
-import { appendChatMessage, createConversation, deleteConversation as deleteConversationFromDb, deleteProvider as deleteProviderRepo, loadAllProviders, loadConversationMessages, loadConversations, loadLibraryState, loadProvider, saveProvider, setActiveProvider as setActiveProviderRepo, updateConversationTitle } from "../storage/sqliteRepository";
+import { appendChatMessage, createConversation, deleteConversation as deleteConversationFromDb, deleteProvider as deleteProviderRepo, loadAllProviders, loadConversationMessages, loadConversations, loadLibraryState, loadProvider, loadTaskAssignments, saveProvider, saveTaskAssignment as saveTaskAssignmentRepo, setActiveProvider as setActiveProviderRepo, updateConversationTitle } from "../storage/sqliteRepository";
 import { deleteBook as deleteBookPersist, deleteVolumePersist, loadChapterContent as fetchChapterContent, saveBook, saveChapter, saveMaterial, saveSkill, saveVolume as saveVolumePersist, updateChapterSummary as persistChapterSummary } from "../storage/incrementalRepository";
 import {
   createInitialOnboardingConversation,
@@ -96,6 +96,8 @@ type AppContextValue = {
   createNewConversation: () => Promise<void>;
   deleteCurrentConversation: (id: string) => Promise<void>;
   refreshConversations: () => Promise<void>;
+  taskAssignments: TaskAssignment[];
+  saveTaskAssignment: (assignment: TaskAssignment) => Promise<void>;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -114,6 +116,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [onboarding, setOnboarding] = useState<OnboardingConversation>(() => createInitialOnboardingConversation());
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [taskAssignments, setTaskAssignments] = useState<TaskAssignment[]>([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -138,6 +141,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const loadedConvs = await loadConversations(firstBook.id);
           if (isMounted) setConversations(loadedConvs);
         }
+        const loadedAssignments = await loadTaskAssignments();
+        if (isMounted) setTaskAssignments(loadedAssignments);
       } catch (caught) {
         if (isMounted) {
           setErrorState(caught instanceof Error ? caught.message : "本地数据初始化失败。");
@@ -437,6 +442,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!selectedBookId) return;
         const loaded = await loadConversations(selectedBookId);
         setConversations(loaded);
+      },
+      taskAssignments,
+      saveTaskAssignment: async (assignment: TaskAssignment) => {
+        await saveTaskAssignmentRepo(assignment);
+        setTaskAssignments((prev) => {
+          const filtered = prev.filter((a) => a.category !== assignment.category);
+          return [...filtered, assignment];
+        });
       }
     }),
     [
@@ -452,7 +465,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       providers,
       selectedBookId,
       selectedChapterId,
-      selectedMaterialId
+      selectedMaterialId,
+      taskAssignments
     ]
   );
 

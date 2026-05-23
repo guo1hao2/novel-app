@@ -1,6 +1,6 @@
 import type { Book, ChapterFile, MaterialFile, SkillTemplate, Volume } from "../types";
 import { normalizeSkillAction } from "../features/library/localLibrary";
-import { getDatabase, initializeDatabaseOnce } from "./sqliteRepository";
+import { getDatabase, initializeDatabaseOnce, repairSchemaOnce } from "./sqliteRepository";
 import { createWriteQueue } from "./storageGuards";
 import {
   deleteWebBook,
@@ -13,6 +13,21 @@ import {
 } from "./webLibraryMirror";
 
 const enqueueWrite = createWriteQueue();
+
+function isMissingTableError(caught: unknown): boolean {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  return /no such table/i.test(message);
+}
+
+async function withSchemaRepair<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (caught) {
+    if (!isMissingTableError(caught)) throw caught;
+    await repairSchemaOnce();
+    return fn();
+  }
+}
 
 export async function saveBook(book: Book): Promise<void> {
   await initializeDatabaseOnce();
@@ -29,7 +44,7 @@ export async function saveBook(book: Book): Promise<void> {
 
 export async function deleteBook(bookId: string): Promise<void> {
   await initializeDatabaseOnce();
-  await enqueueWrite(async () => {
+  await withSchemaRepair(() => enqueueWrite(async () => {
     const database = await getDatabase();
     await database.withTransactionAsync(async () => {
       await database.runAsync("DELETE FROM chapter_files WHERE book_id = ?", [bookId]);
@@ -37,13 +52,13 @@ export async function deleteBook(bookId: string): Promise<void> {
       await database.runAsync("DELETE FROM volumes WHERE book_id = ?", [bookId]);
       await database.runAsync("DELETE FROM books WHERE id = ?", [bookId]);
     });
-  });
+  }));
   deleteWebBook(bookId);
 }
 
 export async function saveChapter(chapter: ChapterFile): Promise<void> {
   await initializeDatabaseOnce();
-  await enqueueWrite(async () => {
+  await withSchemaRepair(() => enqueueWrite(async () => {
     const database = await getDatabase();
     await database.runAsync(
       `INSERT OR REPLACE INTO chapter_files (id, book_id, volume_id, title, content, sort_order, summary, summary_updated_at, created_at, updated_at)
@@ -61,7 +76,7 @@ export async function saveChapter(chapter: ChapterFile): Promise<void> {
         chapter.updatedAt
       ]
     );
-  });
+  }));
   upsertWebChapter(chapter);
 }
 
@@ -79,21 +94,21 @@ export async function saveVolume(volume: Volume): Promise<void> {
 
 export async function deleteVolumePersist(volumeId: string): Promise<void> {
   await initializeDatabaseOnce();
-  await enqueueWrite(async () => {
+  await withSchemaRepair(() => enqueueWrite(async () => {
     const database = await getDatabase();
     await database.withTransactionAsync(async () => {
       await database.runAsync("DELETE FROM chapter_files WHERE volume_id = ?", [volumeId]);
       await database.runAsync("DELETE FROM volumes WHERE id = ?", [volumeId]);
     });
-  });
+  }));
 }
 
 export async function deleteChapter(chapterId: string): Promise<void> {
   await initializeDatabaseOnce();
-  await enqueueWrite(async () => {
+  await withSchemaRepair(() => enqueueWrite(async () => {
     const database = await getDatabase();
     await database.runAsync("DELETE FROM chapter_files WHERE id = ?", [chapterId]);
-  });
+  }));
   deleteWebChapter(chapterId);
 }
 
@@ -144,34 +159,36 @@ export async function saveSkill(skill: SkillTemplate): Promise<void> {
 
 export async function updateChapterSummary(chapterId: string, summary: string): Promise<void> {
   await initializeDatabaseOnce();
-  await enqueueWrite(async () => {
+  await withSchemaRepair(() => enqueueWrite(async () => {
     const database = await getDatabase();
     const updatedAt = new Date().toISOString();
     await database.runAsync(
       "UPDATE chapter_files SET summary = ?, summary_updated_at = ? WHERE id = ?",
       [summary, updatedAt, chapterId]
     );
-  });
+  }));
 }
 
 export async function loadChapterContent(chapterId: string): Promise<string> {
   await initializeDatabaseOnce();
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<{ content: string }>(
-    "SELECT content FROM chapter_files WHERE id = ?",
-    [chapterId]
-  );
-  return row?.content ?? "";
+  return withSchemaRepair(async () => {
+    const database = await getDatabase();
+    const row = await database.getFirstAsync<{ content: string }>(
+      "SELECT content FROM chapter_files WHERE id = ?",
+      [chapterId]
+    );
+    return row?.content ?? "";
+  });
 }
 
 export async function reorderChapters(bookId: string, chapterIds: string[]): Promise<void> {
   await initializeDatabaseOnce();
-  await enqueueWrite(async () => {
+  await withSchemaRepair(() => enqueueWrite(async () => {
     const database = await getDatabase();
     await database.withTransactionAsync(async () => {
       for (let i = 0; i < chapterIds.length; i++) {
         await database.runAsync("UPDATE chapter_files SET sort_order = ? WHERE id = ?", [i + 1, chapterIds[i]]);
       }
     });
-  });
+  }));
 }

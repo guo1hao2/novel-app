@@ -212,6 +212,20 @@ const MIGRATIONS: Migration[] = [
         );
       }
     }
+  },
+  {
+    version: 10,
+    description: "add task_assignments table for global task-to-provider mapping",
+    up: async (db) => {
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS task_assignments (
+          id TEXT PRIMARY KEY NOT NULL,
+          category TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    }
   }
 ];
 

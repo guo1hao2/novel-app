@@ -18,11 +18,13 @@ import { spacing, type ThemeColors } from "../theme";
 
 export function Screen({
   children,
+  contentMaxWidth = 720,
   footer,
   floatingAction,
   stickyHeader
 }: {
   children: ReactNode;
+  contentMaxWidth?: number;
   footer?: ReactNode;
   floatingAction?: ReactNode;
   stickyHeader?: ReactNode;
@@ -36,10 +38,17 @@ export function Screen({
           {stickyHeader}
         </View>
       ) : null}
-      <ScrollView contentContainerStyle={[styles.scrollContent, stickyHeader ? styles.scrollContentWithSticky : null]} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { maxWidth: contentMaxWidth },
+          stickyHeader ? styles.scrollContentWithSticky : null
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
         {children}
       </ScrollView>
-      {footer ? <View style={styles.screenFooter}>{footer}</View> : null}
+      {footer ? <View style={[styles.screenFooter, { maxWidth: contentMaxWidth }]}>{footer}</View> : null}
       {floatingAction ? <View style={styles.floatingActionLayer} pointerEvents="box-none">{floatingAction}</View> : null}
     </SafeAreaView>
   );

@@ -132,18 +132,6 @@ export default function ChapterEditorScreen() {
       <Notice message={notice || app.error} tone={notice.includes("失败") ? "error" : "success"} />
 
       <View style={styles.editorArea}>
-        <View style={styles.titleFieldWrap}>
-          <Text style={styles.titleLabel}>章节名</Text>
-          <TextInput
-            accessibilityLabel="编辑章节名"
-            value={title}
-            onChangeText={handleTitleChange}
-            placeholder="输入章节名"
-            placeholderTextColor={colors.muted}
-            style={styles.titleInput}
-          />
-        </View>
-
         <View style={styles.contentFieldWrap}>
           <View style={styles.contentLabelRow}>
             <Text style={styles.titleLabel}>正文</Text>

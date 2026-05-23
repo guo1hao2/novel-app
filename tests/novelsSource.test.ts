@@ -11,10 +11,13 @@ describe("novels management source", () => {
     expect(source).toContain("书架");
   });
 
-  it("uses roomier mobile bookshelf cover cards", () => {
+  it("uses responsive bookshelf layout helpers instead of fixed cover width", () => {
     const source = readFileSync(join(process.cwd(), "app/(tabs)/novels.tsx"), "utf8");
 
-    expect(source).toContain('const BOOK_COVER_WIDTH = "46.5%"');
+    expect(source).toContain("getBookManagerLayout");
+    expect(source).toContain("useWindowDimensions");
+    expect(source).toContain("layout.shelfCardWidth");
+    expect(source).not.toContain('const BOOK_COVER_WIDTH = "46.5%"');
   });
 });
 

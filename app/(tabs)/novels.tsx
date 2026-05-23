@@ -2,11 +2,11 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, Modal, Platform, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 
 import { Button, ConfirmDialog, Field, HorizontalList, Notice, Pill, Screen, Section, TopBar } from "../../src/components/Ui";
 import { getSelectedBookData, useApp } from "../../src/context/AppContext";
-import { getCreateActionMenuItems, type CreateActionKey } from "../../src/features/library/bookManagerView";
+import { getBookManagerLayout, getCreateActionMenuItems, type BookManagerLayout, type CreateActionKey } from "../../src/features/library/bookManagerView";
 import { useTheme } from "../../src/context/ThemeContext";
 import { spacing, type ThemeColors } from "../../src/theme";
 import type { Book, ChapterFile, MaterialFile, Volume } from "../../src/types";
@@ -15,9 +15,9 @@ type ManagerView = "bookshelf" | "book";
 type BookTab = "catalog" | "related" | "manage";
 type CreateDialogType = CreateActionKey | null;
 
-const BOOK_COVER_WIDTH = "46.5%";
 const PALETTE = ["#0F8B6C", "#4A90D9", "#E67E22", "#27AE60", "#8E44AD", "#E74C3C", "#1ABC9C", "#2C3E50"];
 const CHINESE_NUMBERS = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"];
+const DEFAULT_BOOK_MANAGER_LAYOUT = getBookManagerLayout({ width: 390, platform: "ios" });
 
 function toChineseNumber(n: number): string {
   if (n >= 0 && n < CHINESE_NUMBERS.length) return CHINESE_NUMBERS[n];
@@ -34,7 +34,9 @@ export default function NovelsScreen() {
   const app = useApp();
   const router = useRouter();
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { width } = useWindowDimensions();
+  const layout = useMemo(() => getBookManagerLayout({ width, platform: Platform.OS }), [width]);
+  const styles = useMemo(() => createStyles(colors, layout), [colors, layout]);
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [newVolumeTitle, setNewVolumeTitle] = useState("");
   const [targetVolumeId, setTargetVolumeId] = useState("");
@@ -130,6 +132,7 @@ export default function NovelsScreen() {
     ? (
       <CreateFloatingAction
         isOpen={createActionsOpen}
+        styles={styles}
         onAction={openCreateDialog}
         onToggle={() => setCreateActionsOpen((open) => !open)}
       />
@@ -137,7 +140,7 @@ export default function NovelsScreen() {
     : null;
 
   return (
-    <Screen floatingAction={floatingAction}>
+    <Screen contentMaxWidth={layout.contentMaxWidth} floatingAction={floatingAction}>
       {view === "bookshelf" ? (
         <TopBar title="书架" subtitle={`${app.library.books.length} 部作品`} />
       ) : selected.book ? (
@@ -145,6 +148,7 @@ export default function NovelsScreen() {
           book={selected.book}
           onBack={goBack}
           onMore={() => setActiveTab("manage")}
+          styles={styles}
         />
       ) : null}
 
@@ -162,6 +166,7 @@ export default function NovelsScreen() {
                   volumes={app.library.volumes[book.id] ?? []}
                   active={book.id === app.selectedBookId}
                   onPress={() => openBook(book.id)}
+                  styles={styles}
                 />
               ))}
             </View>
@@ -176,56 +181,61 @@ export default function NovelsScreen() {
       ) : null}
 
       {view === "book" && selected.book ? (
-        <>
-          <BookHero
-            book={selected.book}
-            chapters={selected.chapters}
-            volumes={selected.volumes}
-            onPickCover={pickCoverImage}
-          />
-
-          <BookTabs activeTab={activeTab} onChange={setActiveTab} />
-
-          {activeTab === "catalog" ? (
-            <CatalogPanel
-              chapters={selected.chapters}
-              colors={colors}
-              expandedVolumes={expandedVolumes}
-              onDeleteVolume={setDeletingVolumeId}
-              onOpenChapter={(chapterId) => {
-                app.selectChapter(chapterId);
-                router.push({ pathname: "/chapter-editor", params: { chapterId } });
-              }}
-              onToggleVolume={toggleVolume}
-              styles={styles}
-              volumes={selected.volumes}
-            />
-          ) : null}
-
-          {activeTab === "related" ? (
-            <RelatedPanel
-              colors={colors}
-              materials={selected.materials}
-              onOpenMaterial={(materialId) => {
-                app.selectMaterial(materialId);
-                router.push({ pathname: "/material-editor", params: { materialId } });
-              }}
-              styles={styles}
-            />
-          ) : null}
-
-          {activeTab === "manage" ? (
-            <ManagePanel
+        <View style={layout.detailColumns ? styles.bookDetailShell : styles.bookDetailStack}>
+          <View style={layout.detailColumns ? styles.bookDetailAside : null}>
+            <BookHero
               book={selected.book}
-              colors={colors}
-              onDeleteBook={() => setDeletingBookId(selected.book!.id)}
-              setBookStatus={app.setBookStatus}
-              setBookSummary={app.setBookSummary}
-              setBookTitle={app.setBookTitle}
+              chapters={selected.chapters}
+              volumes={selected.volumes}
+              onPickCover={pickCoverImage}
               styles={styles}
             />
-          ) : null}
-        </>
+          </View>
+
+          <View style={layout.detailColumns ? styles.bookDetailMain : null}>
+            <BookTabs activeTab={activeTab} onChange={setActiveTab} styles={styles} />
+
+            {activeTab === "catalog" ? (
+              <CatalogPanel
+                chapters={selected.chapters}
+                colors={colors}
+                expandedVolumes={expandedVolumes}
+                onDeleteVolume={setDeletingVolumeId}
+                onOpenChapter={(chapterId) => {
+                  app.selectChapter(chapterId);
+                  router.push({ pathname: "/chapter-editor", params: { chapterId } });
+                }}
+                onToggleVolume={toggleVolume}
+                styles={styles}
+                volumes={selected.volumes}
+              />
+            ) : null}
+
+            {activeTab === "related" ? (
+              <RelatedPanel
+                colors={colors}
+                materials={selected.materials}
+                onOpenMaterial={(materialId) => {
+                  app.selectMaterial(materialId);
+                  router.push({ pathname: "/material-editor", params: { materialId } });
+                }}
+                styles={styles}
+              />
+            ) : null}
+
+            {activeTab === "manage" ? (
+              <ManagePanel
+                book={selected.book}
+                colors={colors}
+                onDeleteBook={() => setDeletingBookId(selected.book!.id)}
+                setBookStatus={app.setBookStatus}
+                setBookSummary={app.setBookSummary}
+                setBookTitle={app.setBookTitle}
+                styles={styles}
+              />
+            ) : null}
+          </View>
+        </View>
       ) : null}
 
       <CreateDialog
@@ -267,10 +277,7 @@ export default function NovelsScreen() {
   );
 }
 
-function BookDetailTopBar({ book, onBack, onMore }: { book: Book; onBack: () => void; onMore: () => void }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-
+function BookDetailTopBar({ book, onBack, onMore, styles }: { book: Book; onBack: () => void; onMore: () => void; styles: ReturnType<typeof createStyles> }) {
   return (
     <View style={styles.referenceTopBar}>
       <Pressable
@@ -314,27 +321,22 @@ async function pickCoverImage(): Promise<string | null> {
   return null;
 }
 
-function BookHero({ book, chapters, volumes, onPickCover }: { book: Book; chapters: ChapterFile[]; volumes: Volume[]; onPickCover: () => Promise<string | null> }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-
+function BookHero({ book, chapters, volumes, onPickCover, styles }: { book: Book; chapters: ChapterFile[]; volumes: Volume[]; onPickCover: () => Promise<string | null>; styles: ReturnType<typeof createStyles> }) {
   return (
     <View style={styles.bookHero}>
-      <DefaultCover title={book.title} onPressCover={onPickCover} />
+      <DefaultCover title={book.title} onPressCover={onPickCover} styles={styles} />
       <View style={styles.heroMeta}>
-        <InfoLine label="作者" value="未知" />
-        <InfoLine label="标签" value={formatStatus(book.status)} />
-        <InfoLine label="分卷" value={`${volumes.length}卷`} />
-        <InfoLine label="章节" value={`${chapters.length}章`} />
-        <InfoLine label="字数" value={`${countWords(chapters)}字`} />
+        <InfoLine label="作者" value="未知" styles={styles} />
+        <InfoLine label="标签" value={formatStatus(book.status)} styles={styles} />
+        <InfoLine label="分卷" value={`${volumes.length}卷`} styles={styles} />
+        <InfoLine label="章节" value={`${chapters.length}章`} styles={styles} />
+        <InfoLine label="字数" value={`${countWords(chapters)}字`} styles={styles} />
       </View>
     </View>
   );
 }
 
-function InfoLine({ label, value }: { label: string; value: string }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+function InfoLine({ label, value, styles }: { label: string; value: string; styles: ReturnType<typeof createStyles> }) {
   return (
     <View style={styles.infoLine}>
       <Text style={styles.infoLabel}>{label}：</Text>
@@ -343,9 +345,8 @@ function InfoLine({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BookTabs({ activeTab, onChange }: { activeTab: BookTab; onChange: (tab: BookTab) => void }) {
+function BookTabs({ activeTab, onChange, styles }: { activeTab: BookTab; onChange: (tab: BookTab) => void; styles: ReturnType<typeof createStyles> }) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
   const tabs: Array<{ key: BookTab; label: string; icon?: string }> = [
     { key: "catalog", label: "目录" },
     { key: "related", label: "相关" },
@@ -519,14 +520,15 @@ function ManagePanel({
 function CreateFloatingAction({
   isOpen,
   onAction,
+  styles,
   onToggle
 }: {
   isOpen: boolean;
   onAction: (action: CreateActionKey) => void;
+  styles: ReturnType<typeof createStyles>;
   onToggle: () => void;
 }) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
     <View style={styles.fabWrap}>
@@ -652,16 +654,16 @@ function BookCover({
   book,
   chapters,
   volumes,
-  onPress
+  onPress,
+  styles
 }: {
   active: boolean;
   book: Book;
   chapters: ChapterFile[];
   volumes: Volume[];
   onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
 }) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
   const coverColor = bookColor(book);
 
   return (
@@ -687,9 +689,8 @@ function BookCover({
   );
 }
 
-function DefaultCover({ title, onPressCover }: { title: string; onPressCover: () => void }) {
+function DefaultCover({ title, onPressCover, styles }: { title: string; onPressCover: () => void; styles: ReturnType<typeof createStyles> }) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
     <Pressable onPress={onPressCover} style={styles.defaultCover}>
@@ -734,7 +735,13 @@ function isErrorNotice(message: string): boolean {
   return message.includes("失败") || message.includes("请先") || message.includes("找不到") || message.includes("不足") || message.includes("无法") || message.includes("错误");
 }
 
-function createStyles(colors: ThemeColors) {
+function createStyles(colors: ThemeColors, layout: BookManagerLayout = DEFAULT_BOOK_MANAGER_LAYOUT) {
+  const panelEdgeOffset = layout.detailColumns ? 0 : -spacing.lg;
+  const panelTopOffset = layout.detailColumns ? 0 : -spacing.lg;
+  const primaryRowFontSize = layout.detailColumns ? 17 : 26;
+  const secondaryRowFontSize = layout.detailColumns ? 15 : 22;
+  const panelPaddingBottom = layout.detailColumns ? spacing.lg : 132;
+
   return StyleSheet.create({
     shelfGrid: {
       flexDirection: "row",
@@ -744,8 +751,8 @@ function createStyles(colors: ThemeColors) {
       justifyContent: "space-between"
     },
     coverCard: {
-      width: BOOK_COVER_WIDTH,
-      minHeight: 232,
+      width: layout.shelfCardWidth,
+      minHeight: layout.coverHeight + 54,
       borderRadius: 12,
       backgroundColor: colors.surface,
       padding: spacing.sm
@@ -755,7 +762,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 2
     },
     coverBlock: {
-      height: 178,
+      height: layout.coverHeight,
       borderRadius: 8,
       justifyContent: "flex-end",
       overflow: "hidden",
@@ -792,11 +799,11 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.success,
       flexDirection: "row",
       justifyContent: "space-between",
-      marginHorizontal: -spacing.lg,
-      marginTop: -spacing.lg,
-      minHeight: 82,
+      marginHorizontal: panelEdgeOffset,
+      marginTop: panelTopOffset,
+      minHeight: layout.detailColumns ? 64 : 82,
       paddingHorizontal: spacing.lg,
-      paddingTop: spacing.md
+      paddingTop: layout.detailColumns ? 0 : spacing.md
     },
     referenceTopTitle: {
       color: "#FFFFFF",
@@ -824,23 +831,45 @@ function createStyles(colors: ThemeColors) {
       justifyContent: "center",
       width: 44
     },
-    bookHero: {
-      alignItems: "center",
-      backgroundColor: colors.surface,
+    bookDetailStack: {
+      gap: spacing.lg
+    },
+    bookDetailShell: {
+      alignItems: "flex-start",
       flexDirection: "row",
-      gap: spacing.xl,
-      marginHorizontal: -spacing.lg,
-      marginTop: -spacing.lg,
-      paddingHorizontal: spacing.xl,
-      paddingVertical: spacing.xl
+      gap: spacing.xl
+    },
+    bookDetailAside: {
+      flexBasis: 320,
+      flexShrink: 0,
+      gap: spacing.lg
+    },
+    bookDetailMain: {
+      flex: 1,
+      gap: spacing.md,
+      minWidth: 0
+    },
+    bookHero: {
+      alignItems: layout.detailColumns ? "stretch" : "center",
+      backgroundColor: colors.surface,
+      borderColor: layout.detailColumns ? colors.border : "transparent",
+      borderRadius: layout.detailColumns ? 16 : 0,
+      borderWidth: layout.detailColumns ? 1 : 0,
+      flexDirection: layout.detailColumns ? "column" : "row",
+      gap: layout.detailColumns ? spacing.lg : spacing.xl,
+      marginHorizontal: panelEdgeOffset,
+      marginTop: panelTopOffset,
+      paddingHorizontal: layout.detailColumns ? spacing.lg : spacing.xl,
+      paddingVertical: layout.detailColumns ? spacing.lg : spacing.xl
     },
     defaultCover: {
       backgroundColor: "#F7F6F0",
       borderRadius: 7,
-      height: 142,
+      alignSelf: layout.detailColumns ? "center" : "auto",
+      height: layout.detailColumns ? 196 : 142,
       overflow: "hidden",
       position: "relative",
-      width: 104
+      width: layout.detailColumns ? 144 : 104
     },
     ribbon: {
       backgroundColor: colors.success,
@@ -935,14 +964,14 @@ function createStyles(colors: ThemeColors) {
     },
     infoLabel: {
       color: colors.text,
-      fontSize: 22,
-      lineHeight: 29
+      fontSize: layout.detailColumns ? 15 : 22,
+      lineHeight: layout.detailColumns ? 22 : 29
     },
     infoValue: {
       color: colors.text,
       flex: 1,
-      fontSize: 22,
-      lineHeight: 29
+      fontSize: layout.detailColumns ? 15 : 22,
+      lineHeight: layout.detailColumns ? 22 : 29
     },
     tabsBar: {
       alignItems: "center",
@@ -951,9 +980,9 @@ function createStyles(colors: ThemeColors) {
       borderBottomWidth: 1,
       flexDirection: "row",
       justifyContent: "space-around",
-      marginHorizontal: -spacing.lg,
-      marginTop: -spacing.lg,
-      minHeight: 82
+      marginHorizontal: panelEdgeOffset,
+      marginTop: panelTopOffset,
+      minHeight: layout.detailColumns ? 58 : 82
     },
     tabItem: {
       alignItems: "center",
@@ -964,7 +993,7 @@ function createStyles(colors: ThemeColors) {
     },
     tabText: {
       color: colors.muted,
-      fontSize: 25,
+      fontSize: layout.detailColumns ? 17 : 25,
       fontWeight: "500"
     },
     tabTextActive: {
@@ -981,9 +1010,13 @@ function createStyles(colors: ThemeColors) {
     },
     flatPanel: {
       backgroundColor: colors.surface,
-      marginHorizontal: -spacing.lg,
-      marginTop: -spacing.lg,
-      paddingBottom: 132
+      borderColor: layout.detailColumns ? colors.border : "transparent",
+      borderRadius: layout.detailColumns ? 16 : 0,
+      borderWidth: layout.detailColumns ? 1 : 0,
+      marginHorizontal: panelEdgeOffset,
+      marginTop: panelTopOffset,
+      overflow: "hidden",
+      paddingBottom: panelPaddingBottom
     },
     volumeRow: {
       alignItems: "center",
@@ -991,14 +1024,14 @@ function createStyles(colors: ThemeColors) {
       borderBottomWidth: 1,
       flexDirection: "row",
       justifyContent: "space-between",
-      minHeight: 70,
+      minHeight: layout.detailColumns ? 56 : 70,
       paddingHorizontal: spacing.lg
     },
     volumeToggleButton: {
       alignItems: "center",
       flex: 1,
       flexDirection: "row",
-      minHeight: 70
+      minHeight: layout.detailColumns ? 56 : 70
     },
     rowTitleGroup: {
       alignItems: "center",
@@ -1009,7 +1042,7 @@ function createStyles(colors: ThemeColors) {
     volumeTitle: {
       color: colors.muted,
       flex: 1,
-      fontSize: 27,
+      fontSize: primaryRowFontSize,
       fontWeight: "500"
     },
     rowTrailingGroup: {
@@ -1019,7 +1052,7 @@ function createStyles(colors: ThemeColors) {
     },
     rowTrailing: {
       color: colors.muted,
-      fontSize: 22,
+      fontSize: secondaryRowFontSize,
       minWidth: 54,
       textAlign: "right"
     },
@@ -1035,7 +1068,7 @@ function createStyles(colors: ThemeColors) {
       borderBottomWidth: 1,
       flexDirection: "row",
       justifyContent: "space-between",
-      minHeight: 78,
+      minHeight: layout.detailColumns ? 58 : 78,
       paddingLeft: spacing.xxxl,
       paddingRight: spacing.lg
     },
@@ -1045,7 +1078,7 @@ function createStyles(colors: ThemeColors) {
     chapterTitle: {
       color: colors.text,
       flex: 1,
-      fontSize: 26,
+      fontSize: primaryRowFontSize,
       fontWeight: "500"
     },
     materialRow: {
@@ -1054,22 +1087,25 @@ function createStyles(colors: ThemeColors) {
       borderBottomWidth: 1,
       flexDirection: "row",
       justifyContent: "space-between",
-      minHeight: 86,
+      minHeight: layout.detailColumns ? 62 : 86,
       paddingHorizontal: spacing.xl
     },
     materialTitle: {
       color: colors.text,
       flex: 1,
-      fontSize: 27,
+      fontSize: primaryRowFontSize,
       fontWeight: "500"
     },
     managePanel: {
       backgroundColor: colors.surface,
+      borderColor: layout.detailColumns ? colors.border : "transparent",
+      borderRadius: layout.detailColumns ? 16 : 0,
+      borderWidth: layout.detailColumns ? 1 : 0,
       gap: spacing.lg,
-      marginHorizontal: -spacing.lg,
-      marginTop: -spacing.lg,
+      marginHorizontal: panelEdgeOffset,
+      marginTop: panelTopOffset,
       padding: spacing.lg,
-      paddingBottom: 132
+      paddingBottom: panelPaddingBottom
     },
     manageHint: {
       color: colors.muted,
@@ -1088,7 +1124,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: "flex-end",
       alignSelf: "center",
       gap: spacing.lg,
-      maxWidth: 720,
+      maxWidth: layout.contentMaxWidth,
       paddingRight: spacing.xl,
       width: "100%"
     },

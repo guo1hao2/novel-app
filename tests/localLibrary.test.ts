@@ -75,6 +75,32 @@ describe("book library helpers", () => {
     expect(materials.find((file) => file.kind === "chapterSummary")?.content).toContain("Chapter one");
   });
 
+  it("preserves rich onboarding material sections without changing default material kinds", () => {
+    const result = createBook(createEmptyLibraryState(), {
+      title: "霓虹回声",
+      summary: "夜班急救员在事故现场听见未来凶案。",
+      materials: {
+        worldbuilding: "【世界规则】近未来城市由企业监管异能。\n【能力体系】异能会留下情绪回声。",
+        characters: "【主角能力】能听见物品残留情绪。\n【动机】查清未来凶案。",
+        plotOutline: "【第一卷主线】追查事故背后的企业实验。\n1. 事故现场\n2. 追踪信号\n3. 企业档案",
+        chapterSummary: "【第一章目标】救人时发现能力被追踪。\n【开篇钩子】未来凶案的声音来自死者手机。"
+      }
+    });
+
+    const materials = getBookMaterials(result.state, result.book.id);
+
+    expect(materials.map((file) => file.kind)).toEqual([
+      "worldbuilding",
+      "characters",
+      "plotOutline",
+      "chapterSummary"
+    ]);
+    expect(materials.find((file) => file.kind === "worldbuilding")?.content).toContain("【能力体系】");
+    expect(materials.find((file) => file.kind === "characters")?.content).toContain("【主角能力】");
+    expect(materials.find((file) => file.kind === "plotOutline")?.content).toContain("【第一卷主线】");
+    expect(materials.find((file) => file.kind === "chapterSummary")?.content).toContain("【开篇钩子】");
+  });
+
   it("updates material files and appends AI output to the selected chapter", () => {
     const created = createBook(createEmptyLibraryState(), {
       title: "Moon City",

@@ -1,5 +1,5 @@
 import * as SQLite from "expo-sqlite";
-import type { ApiProvider, Book, ChatMessage, ChapterFile, Conversation, MaterialField, MaterialFile, MaterialKind, SkillAction, SkillTemplate, Volume } from "../types";
+import type { ApiProvider, Book, ChatMessage, ChapterFile, Conversation, MaterialField, MaterialFile, MaterialKind, SkillAction, SkillTemplate, TaskAssignment, TaskCategory, Volume } from "../types";
 import { createDefaultSkills, normalizeSkillAction, type LibraryState } from "../features/library/localLibrary";
 import { DEFAULT_PROVIDER } from "../features/settings/defaultProvider";
 import { normalizeMaxTokens } from "../features/settings/maxTokens";
@@ -507,6 +507,40 @@ export async function updateConversationTitle(conversationId: string, title: str
   });
 }
 
+type TaskAssignmentRow = {
+  id: string;
+  category: string;
+  provider_id: string;
+  updated_at: string;
+};
+
+export async function loadTaskAssignments(): Promise<TaskAssignment[]> {
+  await initializeDatabaseOnce();
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<TaskAssignmentRow>(
+    "SELECT * FROM task_assignments",
+    []
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    category: row.category as TaskCategory,
+    providerId: row.provider_id,
+    updatedAt: row.updated_at
+  }));
+}
+
+export async function saveTaskAssignment(assignment: TaskAssignment): Promise<void> {
+  await initializeDatabaseOnce();
+  await enqueueWrite(async () => {
+    const database = await getDatabase();
+    await database.runAsync(
+      `INSERT OR REPLACE INTO task_assignments (id, category, provider_id, updated_at)
+       VALUES (?, ?, ?, ?)`,
+      [assignment.id, assignment.category, assignment.providerId, assignment.updatedAt]
+    );
+  });
+}
+
 async function migrateLegacyTablesIfNeeded(database: SQLite.SQLiteDatabase): Promise<void> {
   const bookCount = await database.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM books", []);
   if ((bookCount?.count ?? 0) > 0) return;
@@ -616,6 +650,11 @@ async function insertDefaultProvider(database: SQLite.SQLiteDatabase): Promise<v
   );
 }
 
+export async function repairSchemaOnce(): Promise<void> {
+  const database = await getDatabase();
+  await repairCoreSchema(database);
+}
+
 async function migrateAndRepairSchema(database: SQLite.SQLiteDatabase): Promise<void> {
   try {
     await runMigrations(database);
@@ -628,7 +667,9 @@ async function migrateAndRepairSchema(database: SQLite.SQLiteDatabase): Promise<
 
 async function repairCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> {
   try { await database.execAsync("PRAGMA journal_mode = WAL;"); } catch {}
-  const schemaStatements = [
+  // 用 withTransactionAsync 确保所有 DDL 原子提交
+  await database.withTransactionAsync(async () => {
+    const schemaStatements = [
     `CREATE TABLE IF NOT EXISTS books (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL,
@@ -703,6 +744,12 @@ async function repairCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> 
       api_key_storage_key TEXT NOT NULL,
       is_active INTEGER NOT NULL DEFAULT 0
     )`,
+    `CREATE TABLE IF NOT EXISTS task_assignments (
+      id TEXT PRIMARY KEY NOT NULL,
+      category TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS schema_version (
       version INTEGER PRIMARY KEY NOT NULL
     )`,
@@ -712,27 +759,28 @@ async function repairCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> 
     "CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id)",
     "CREATE INDEX IF NOT EXISTS idx_conversations_book_id ON conversations(book_id)",
     "CREATE INDEX IF NOT EXISTS idx_chapter_files_sort ON chapter_files(book_id, sort_order)",
-    "CREATE INDEX IF NOT EXISTS idx_volumes_book_id ON volumes(book_id)"
-  ];
-  for (const statement of schemaStatements) {
-    await database.execAsync(statement);
-  }
-  const columnRepairs: Array<[string, string]> = [
-    ["books", "cover_color TEXT NOT NULL DEFAULT ''"],
-    ["chapter_files", "volume_id TEXT NOT NULL DEFAULT ''"],
-    ["chapter_files", "summary TEXT NOT NULL DEFAULT ''"],
-    ["chapter_files", "summary_updated_at TEXT NOT NULL DEFAULT ''"],
-    ["material_files", "fields TEXT NOT NULL DEFAULT '[]'"],
-    ["material_files", "tags TEXT NOT NULL DEFAULT '[]'"],
-    ["skills", "action TEXT NOT NULL DEFAULT 'appendText'"],
-    ["chat_messages", "conversation_id TEXT NOT NULL DEFAULT ''"],
-    ["api_providers", "vendor TEXT NOT NULL DEFAULT 'deepseek'"],
-    ["api_providers", "is_active INTEGER NOT NULL DEFAULT 0"]
-  ];
-  for (const [tableName, columnDefinition] of columnRepairs) {
-    await addColumnIfMissing(database, tableName, columnDefinition);
-  }
-  await database.runAsync("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", [getLatestVersion()]);
+      "CREATE INDEX IF NOT EXISTS idx_volumes_book_id ON volumes(book_id)"
+    ];
+    for (const statement of schemaStatements) {
+      await database.execAsync(statement);
+    }
+    const columnRepairs: Array<[string, string]> = [
+      ["books", "cover_color TEXT NOT NULL DEFAULT ''"],
+      ["chapter_files", "volume_id TEXT NOT NULL DEFAULT ''"],
+      ["chapter_files", "summary TEXT NOT NULL DEFAULT ''"],
+      ["chapter_files", "summary_updated_at TEXT NOT NULL DEFAULT ''"],
+      ["material_files", "fields TEXT NOT NULL DEFAULT '[]'"],
+      ["material_files", "tags TEXT NOT NULL DEFAULT '[]'"],
+      ["skills", "action TEXT NOT NULL DEFAULT 'appendText'"],
+      ["chat_messages", "conversation_id TEXT NOT NULL DEFAULT ''"],
+      ["api_providers", "vendor TEXT NOT NULL DEFAULT 'deepseek'"],
+      ["api_providers", "is_active INTEGER NOT NULL DEFAULT 0"]
+    ];
+    for (const [tableName, columnDefinition] of columnRepairs) {
+      await addColumnIfMissing(database, tableName, columnDefinition);
+    }
+    await database.runAsync("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", [getLatestVersion()]);
+  });
 }
 
 async function addColumnIfMissing(database: SQLite.SQLiteDatabase, tableName: string, columnDefinition: string): Promise<void> {
@@ -753,14 +801,12 @@ async function assertCoreSchema(database: SQLite.SQLiteDatabase): Promise<void> 
     "volumes",
     "schema_version"
   ];
-  const missingTables: string[] = [];
   for (const tableName of requiredTables) {
     if (!(await tableExists(database, tableName))) {
-      missingTables.push(tableName);
+      // 表不存在，重新执行修复而不是抛异常
+      await repairCoreSchema(database);
+      return;
     }
-  }
-  if (missingTables.length) {
-    throw new Error(`Database schema is incomplete; missing tables: ${missingTables.join(", ")}`);
   }
 }
 

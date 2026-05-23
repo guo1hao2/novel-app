@@ -94,6 +94,33 @@ describe("book onboarding helpers", () => {
     expect(finalMessages.map((message) => message.content).join("\n")).toContain("json");
   });
 
+  it("asks finalization to create a rich structured material library without changing the JSON shape", () => {
+    const messages = buildFinalizeBookMessages({
+      genre: "都市异能，暂定书名《霓虹回声》",
+      workingTitle: "霓虹回声",
+      styleName: "冷峻都市悬疑风",
+      styleDescription: "现实城市压力、异能规则和悬疑推进并重",
+      customStyle: "",
+      protagonist: "能听见物品残留情绪的夜班急救员",
+      conflict: "在事故现场听见未来凶案",
+      setting: "近未来城市，异能被企业监管",
+      openingGoal: "救人时发现能力被追踪"
+    });
+
+    const content = messages.map((message) => message.content).join("\n");
+
+    expect(content).toContain('"title"');
+    expect(content).toContain('"worldbuilding"');
+    expect(content).toContain("按小标题组织");
+    expect(content).toContain("世界规则");
+    expect(content).toContain("能力体系");
+    expect(content).toContain("主角能力");
+    expect(content).toContain("第一卷主线");
+    expect(content).toContain("6-10 个后续情节点");
+    expect(content).toContain("第一章目标");
+    expect(content).toContain("开篇钩子");
+  });
+
   it("builds and parses AI reply options for each onboarding turn", () => {
     const initial = createInitialOnboardingConversation();
     const messages = buildOnboardingReplyMessages({

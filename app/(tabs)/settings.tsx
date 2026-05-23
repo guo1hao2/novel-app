@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Button, ConfirmDialog, Field, HorizontalList, Notice, Pill, Screen, SettingsCard, SwitchRow, TopBar } from "../../src/components/Ui";
 import { useApp } from "../../src/context/AppContext";
@@ -9,7 +9,7 @@ import { requestChatCompletion } from "../../src/features/ai/apiClient";
 import { DEEPSEEK_VENDOR_CONFIG } from "../../src/features/settings/defaultProvider";
 import { MAX_TOKENS_UPPER_BOUND, normalizeMaxTokens } from "../../src/features/settings/maxTokens";
 import { spacing, type ThemeColors } from "../../src/theme";
-import type { ApiProvider, ApiVendor, SkillAction } from "../../src/types";
+import type { ApiProvider, ApiVendor, SkillAction, TaskCategory } from "../../src/types";
 
 const SKILL_ACTION_OPTIONS: Array<{ action: SkillAction; label: string }> = [
   { action: "appendText", label: "追加正文" },
@@ -304,6 +304,8 @@ export default function SettingsScreen() {
         <Button title="测试连接" onPress={testProvider} variant="secondary" loading={testing} />
       </SettingsCard>
 
+      <TaskAssignmentCard />
+
       <SettingsCard title="Skill 模板">
         <HorizontalList>
           {app.library.skills.map((skill) => (
@@ -393,6 +395,263 @@ function ProviderActionButton({
       <Ionicons name={icon} size={19} color={disabled ? colors.muted : iconColor} />
     </Pressable>
   );
+}
+
+const TASK_CATEGORY_OPTIONS: Array<{ category: TaskCategory; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
+  { category: "planning", label: "规划", icon: "compass-outline" },
+  { category: "writing", label: "写作", icon: "create-outline" },
+  { category: "drawing", label: "绘图", icon: "image-outline" }
+];
+
+function TaskAssignmentCard() {
+  const app = useApp();
+  const { colors } = useTheme();
+  const taskStyles = useMemo(() => createTaskStyles(colors), [colors]);
+  const [pickerCategory, setPickerCategory] = useState<TaskCategory | null>(null);
+
+  function getAssignedProvider(category: TaskCategory): ApiProvider | undefined {
+    const id = app.taskAssignments.find((a) => a.category === category)?.providerId;
+    return app.providers.find((p) => p.id === id);
+  }
+
+  async function handleSelectProvider(providerId: string) {
+    if (!pickerCategory) return;
+    await app.saveTaskAssignment({
+      id: `task-${pickerCategory}`,
+      category: pickerCategory,
+      providerId,
+      updatedAt: new Date().toISOString()
+    });
+    setPickerCategory(null);
+  }
+
+  return (
+    <SettingsCard title="任务分配">
+      <Text style={taskStyles.description}>为不同任务类型指定使用的模型 Provider。</Text>
+      <View style={taskStyles.categoryList}>
+        {TASK_CATEGORY_OPTIONS.map(({ category, label, icon }) => {
+          const assigned = getAssignedProvider(category);
+          return (
+            <View key={category} style={taskStyles.categorySlot}>
+              <View style={taskStyles.categoryHeader}>
+                <Ionicons name={icon} size={18} color={colors.primary} />
+                <Text style={taskStyles.categoryLabel}>{label}</Text>
+              </View>
+              {assigned ? (
+                <Pressable
+                  style={({ pressed }) => [taskStyles.assignedCard, pressed && taskStyles.pressed]}
+                  onPress={() => setPickerCategory(category)}
+                >
+                  <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                  <Text style={taskStyles.assignedName} numberOfLines={1}>{assigned.name}</Text>
+                  <Text style={taskStyles.changeHint}>更换</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  style={({ pressed }) => [taskStyles.addCard, pressed && taskStyles.pressed]}
+                  onPress={() => setPickerCategory(category)}
+                >
+                  <Ionicons name="add" size={24} color={colors.primary} />
+                  <Text style={taskStyles.addLabel}>选择 Provider</Text>
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
+      </View>
+
+      <Modal
+        visible={pickerCategory !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPickerCategory(null)}
+      >
+        <Pressable style={taskStyles.modalOverlay} onPress={() => setPickerCategory(null)}>
+          <Pressable style={taskStyles.modalSheet} onPress={(e) => e.stopPropagation()}>
+            <View style={taskStyles.modalHeader}>
+              <Text style={taskStyles.modalTitle}>
+                选择 Provider — {TASK_CATEGORY_OPTIONS.find((o) => o.category === pickerCategory)?.label}
+              </Text>
+            </View>
+            <ScrollView style={taskStyles.modalScroll} keyboardShouldPersistTaps="handled">
+              {app.providers.map((p) => {
+                const isActive = pickerCategory
+                  ? getAssignedProvider(pickerCategory)?.id === p.id
+                  : false;
+                return (
+                  <Pressable
+                    key={p.id}
+                    style={({ pressed }) => [
+                      taskStyles.modalItem,
+                      isActive && taskStyles.modalItemActive,
+                      pressed && taskStyles.pressed
+                    ]}
+                    onPress={() => void handleSelectProvider(p.id)}
+                  >
+                    <Text
+                      style={[taskStyles.modalItemText, isActive && taskStyles.modalItemTextActive]}
+                      numberOfLines={1}
+                    >
+                      {p.name}
+                    </Text>
+                    {isActive && <Ionicons name="checkmark" size={18} color={colors.primary} />}
+                  </Pressable>
+                );
+              })}
+              {app.providers.length === 0 && (
+                <Text style={taskStyles.emptyHint}>暂无 Provider，请先在 API 管理中添加。</Text>
+              )}
+            </ScrollView>
+            <Pressable
+              style={({ pressed }) => [taskStyles.modalCloseBtn, pressed && taskStyles.pressed]}
+              onPress={() => setPickerCategory(null)}
+            >
+              <Text style={taskStyles.modalCloseText}>关闭</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </SettingsCard>
+  );
+}
+
+function createTaskStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    description: {
+      color: colors.muted,
+      fontSize: 13,
+      lineHeight: 18
+    },
+    categoryList: {
+      gap: spacing.lg
+    },
+    categorySlot: {
+      gap: spacing.sm
+    },
+    categoryHeader: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.sm
+    },
+    categoryLabel: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "700"
+    },
+    addCard: {
+      alignItems: "center",
+      borderColor: colors.border,
+      borderRadius: 14,
+      borderStyle: "dashed",
+      borderWidth: 1.5,
+      flexDirection: "row",
+      gap: spacing.sm,
+      justifyContent: "center",
+      paddingVertical: spacing.md
+    },
+    addLabel: {
+      color: colors.primary,
+      fontSize: 14,
+      fontWeight: "600"
+    },
+    assignedCard: {
+      alignItems: "center",
+      backgroundColor: colors.surfaceAlt,
+      borderColor: colors.primary,
+      borderRadius: 14,
+      borderStyle: "solid",
+      borderWidth: 1,
+      flexDirection: "row",
+      gap: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.md
+    },
+    assignedName: {
+      color: colors.text,
+      flex: 1,
+      fontSize: 14,
+      fontWeight: "600"
+    },
+    changeHint: {
+      color: colors.primary,
+      fontSize: 12,
+      fontWeight: "500"
+    },
+    pressed: {
+      opacity: 0.7
+    },
+    modalOverlay: {
+      alignItems: "center",
+      backgroundColor: "rgba(0,0,0,0.45)",
+      flex: 1,
+      justifyContent: "center",
+      padding: spacing.lg
+    },
+    modalSheet: {
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      maxHeight: 420,
+      overflow: "hidden",
+      width: "100%"
+    },
+    modalHeader: {
+      borderBottomColor: colors.border,
+      borderBottomWidth: 1,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md
+    },
+    modalTitle: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: "700"
+    },
+    modalScroll: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm
+    },
+    modalItem: {
+      alignItems: "center",
+      borderColor: colors.border,
+      borderRadius: 12,
+      borderWidth: 1,
+      flexDirection: "row",
+      gap: spacing.sm,
+      marginBottom: spacing.xs,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.md
+    },
+    modalItemActive: {
+      backgroundColor: colors.surfaceAlt,
+      borderColor: colors.primary
+    },
+    modalItemText: {
+      color: colors.text,
+      flex: 1,
+      fontSize: 15,
+      fontWeight: "500"
+    },
+    modalItemTextActive: {
+      color: colors.primary,
+      fontWeight: "700"
+    },
+    emptyHint: {
+      color: colors.muted,
+      fontSize: 13,
+      paddingVertical: spacing.lg,
+      textAlign: "center"
+    },
+    modalCloseBtn: {
+      alignItems: "center",
+      borderTopColor: colors.border,
+      borderTopWidth: 1,
+      paddingVertical: spacing.md
+    },
+    modalCloseText: {
+      color: colors.primary,
+      fontSize: 15,
+      fontWeight: "600"
+    }
+  });
 }
 
 function createStyles(colors: ThemeColors) {

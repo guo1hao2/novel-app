@@ -135,8 +135,9 @@ export default function ChatScreen() {
     setComposerValue("");
     if (!app.library.books.length) {
       setNotice("还没有可续写的书本，请先新建书本。");
+      return;
     }
-    router.push("/chat?mode=continue");
+    router.push("/continuation");
   }
 
   function returnToEntry() {
@@ -341,7 +342,7 @@ export default function ChatScreen() {
       setNotice("书本已创建，资料库也已经写入，可以开始续写。");
       app.resetOnboarding();
       setLoadedMessages([]);
-      router.push(`/chat?mode=continue&bookId=${encodeURIComponent(bookId)}`);
+      router.push(`/continuation-chat?bookId=${encodeURIComponent(bookId)}`);
     } catch (caught) {
       setNotice(caught instanceof Error ? caught.message : "创建书本失败。");
     } finally {

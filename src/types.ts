@@ -84,6 +84,15 @@ export type SkillTemplate = {
 
 export type ApiVendor = "deepseek" | "openai";
 
+export type TaskCategory = "planning" | "writing" | "drawing";
+
+export type TaskAssignment = {
+  id: string;
+  category: TaskCategory;
+  providerId: string;
+  updatedAt: string;
+};
+
 export type ApiProvider = {
   id: string;
   name: string;
