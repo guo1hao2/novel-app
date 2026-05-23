@@ -53,3 +53,9 @@ expo-server*.log
 expo-*.tmp.log
 expo-ui-check*.log
 *.tmp
+
+.superpowers/
+
+# Local docs / references
+*.md
+参考/
